@@ -46,3 +46,8 @@ func IsUniqueViolation(err error) bool {
 	var pqErr *pgconn.PgError
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
+
+func IsRestrictViolation(err error) bool {
+	var pqErr *pgconn.PgError
+	return errors.As(err, &pqErr) && pqErr.Code == "23001"
+}
