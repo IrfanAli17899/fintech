@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 
+	"github.com/irfanali17899/fintech/internal/domain"
 	"github.com/irfanali17899/fintech/internal/services"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
@@ -16,8 +17,26 @@ func NewAccountHandler(accSvc *services.AccountService) *AccountHandler {
 }
 
 func (h *AccountHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /accounts/{id}", h.GetAccount)
 	mux.HandleFunc("POST /accounts", h.CreateAccount)
+	mux.HandleFunc("GET /accounts", h.ListAccounts)
+	mux.HandleFunc("GET /accounts/{id}", h.GetAccount)
+	mux.HandleFunc("GET /accounts/{id}/balance", h.GetAccountBalance)
+
+}
+
+func (h *AccountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
+	q, err := httpx.DecodeQuery[listAccountsQuery](r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+
+	if err := q.Validate(); err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	acc, err := h.accSvc.ListByOwner(r.Context(), domain.OwnerType(q.OwnerType), q.OwnerID)
+	httpx.OK(w, toAccountListResponse(acc), err)
 }
 
 func (h *AccountHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
@@ -38,4 +57,14 @@ func (h *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	acc, err := h.accSvc.CreateAccount(r.Context(), req.toDomain())
 	httpx.Created(w, toAccountResponse(acc), err)
+}
+
+func (h *AccountHandler) GetAccountBalance(w http.ResponseWriter, r *http.Request) {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	balance, err := h.accSvc.GetAccountBalance(r.Context(), id)
+	httpx.OK(w, toBalanceResponse(balance), err)
 }

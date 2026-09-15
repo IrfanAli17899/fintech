@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,16 @@ type Account struct {
 	Currency  string
 	Type      AccountType
 	CreatedAt time.Time
+}
+
+func (t AccountType) NormalBalance(debits, credits int64) int64 {
+	switch t {
+	case AccountAsset, AccountExpense:
+		return debits - credits
+	case AccountLiability, AccountRevenue:
+		return credits - debits
+	}
+	panic(fmt.Sprintf("unknown account type %q", t))
 }
 
 func (t AccountType) Valid() bool {

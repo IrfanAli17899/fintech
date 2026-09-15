@@ -21,6 +21,20 @@ func NewAccountRepo(db *sql.DB) *AccountRepo {
 
 func (r *AccountRepo) WithTx(tx *sql.Tx) *AccountRepo { return &AccountRepo{db: tx} }
 
+const accountColumns = "id, owner_type, owner_id, currency, type, created_at"
+
+func scanAccounts(rows *sql.Rows) ([]domain.Account, error) {
+	var out []domain.Account
+	for rows.Next() {
+		var a domain.Account
+		if err := rows.Scan(&a.ID, &a.OwnerType, &a.OwnerID, &a.Currency, &a.Type, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func (r *AccountRepo) Create(ctx context.Context, a domain.Account) (*domain.Account, error) {
 	err := r.db.QueryRowContext(ctx,
 		`INSERT INTO accounts (owner_type, owner_id, currency, type) 
@@ -42,8 +56,8 @@ func (r *AccountRepo) Create(ctx context.Context, a domain.Account) (*domain.Acc
 func (r *AccountRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Account, error) {
 	var a domain.Account
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, owner_id, owner_type, currency, type, created_at from accounts where id=$1`,
-		id).Scan(&a.ID, &a.OwnerID, &a.OwnerType, &a.Currency, &a.Type, &a.CreatedAt)
+		`SELECT `+accountColumns+` from accounts where id=$1`,
+		id).Scan(&a.ID, &a.OwnerType, &a.OwnerID, &a.Currency, &a.Type, &a.CreatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrAccountNotFound(id)
@@ -86,17 +100,31 @@ func (r *AccountRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.U
 	}
 	defer rows.Close()
 
+	accounts, err := scanAccounts(rows)
+	if err != nil {
+		return nil, errdefs.Internalf(err, "scan accounts")
+	}
 	out := make(map[uuid.UUID]domain.Account, len(ids))
-
-	for rows.Next() {
-		var a domain.Account
-		if err := rows.Scan(&a.ID, &a.OwnerType, &a.OwnerID, &a.Currency, &a.Type, &a.CreatedAt); err != nil {
-			return nil, errdefs.Internalf(err, "scan account")
-		}
+	for _, a := range accounts {
 		out[a.ID] = a
 	}
 
-	if err := rows.Err(); err != nil {
+	return out, nil
+}
+
+func (r *AccountRepo) ListByOwner(ctx context.Context, ownerType domain.OwnerType, ownerID string) ([]domain.Account, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+accountColumns+`
+		 FROM accounts WHERE owner_type = $1 AND owner_id = $2 ORDER BY created_at`,
+		ownerType, ownerID)
+
+	if err != nil {
+		return nil, errdefs.Internalf(err, "list accounts by owner")
+	}
+	defer rows.Close()
+
+	out, err := scanAccounts(rows)
+	if err != nil {
 		return nil, errdefs.Internalf(err, "scan accounts")
 	}
 	return out, nil

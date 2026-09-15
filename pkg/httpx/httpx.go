@@ -42,6 +42,15 @@ func PathUUID(r *http.Request, name string) (uuid.UUID, error) {
 	return id, nil
 }
 
+func Query(r *http.Request, names ...string) map[string]string {
+	q := r.URL.Query()
+	out := make(map[string]string, len(names))
+	for _, n := range names {
+		out[n] = q.Get(n)
+	}
+	return out
+}
+
 // --- output ---
 
 func WriteJSON(w http.ResponseWriter, status int, v any) {
