@@ -6,7 +6,6 @@ CREATE TABLE transactions (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   kind            transaction_kind NOT NULL,
   status          transaction_status NOT NULL DEFAULT 'posted',
-  idempotency_key TEXT NOT NULL UNIQUE,
   reverses_id     UUID REFERENCES transactions(id),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   posted_at       TIMESTAMPTZ
