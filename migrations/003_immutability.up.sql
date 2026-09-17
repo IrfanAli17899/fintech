@@ -31,5 +31,5 @@ CREATE TRIGGER transactions_immutable
   BEFORE UPDATE ON transactions
   FOR EACH ROW EXECUTE FUNCTION transactions_restrict_update();
 
-REVOKE UPDATE, DELETE ON entries FROM ledger;
-REVOKE DELETE ON transactions FROM ledger;
+REVOKE UPDATE, DELETE ON entries FROM fintech;
+REVOKE DELETE ON transactions FROM fintech;

@@ -15,10 +15,17 @@ type LedgerService struct {
 	accRepo         *repositories.AccountRepo
 	transactionRepo *repositories.TransactionRepo
 	entryRepo       *repositories.EntryRepo
+	balanceRepo     *repositories.BalanceRepo
 }
 
-func NewLedgerService(txRunner database.TxRunner, accRepo *repositories.AccountRepo, transactionRepo *repositories.TransactionRepo, entryRepo *repositories.EntryRepo) *LedgerService {
-	return &LedgerService{txRunner, accRepo, transactionRepo, entryRepo}
+func NewLedgerService(
+	txRunner database.TxRunner,
+	accRepo *repositories.AccountRepo,
+	transactionRepo *repositories.TransactionRepo,
+	entryRepo *repositories.EntryRepo,
+	balanceRepo *repositories.BalanceRepo,
+) *LedgerService {
+	return &LedgerService{txRunner, accRepo, transactionRepo, entryRepo, balanceRepo}
 }
 
 func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
@@ -30,7 +37,12 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 	var created *domain.Transaction
 
 	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		accounts, err := s.accRepo.WithTx(tx).GetByIDs(ctx, ids)
+		accounts := s.accRepo.WithTx(tx)
+		txns := s.transactionRepo.WithTx(tx)
+		entries := s.entryRepo.WithTx(tx)
+		balances := s.balanceRepo.WithTx(tx)
+
+		accMap, err := accounts.GetByIDs(ctx, ids)
 		if err != nil {
 			return err
 		}
@@ -38,7 +50,7 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 		var currency string
 		// check all account exits and currency matches
 		for _, id := range ids {
-			acc, ok := accounts[id]
+			acc, ok := accMap[id]
 			if !ok {
 				return domain.ErrAccountNotFound(id)
 			}
@@ -50,7 +62,7 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 				return domain.ErrCurrencyMismatch(acc.ID, currency, acc.Currency)
 			}
 		}
-		created, err = s.transactionRepo.WithTx(tx).Create(ctx, t)
+		created, err = txns.Create(ctx, t)
 		if err != nil {
 			return err
 		}
@@ -59,11 +71,17 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 			t.Entries[i].TransactionID = created.ID
 		}
 
-		entries, err := s.entryRepo.WithTx(tx).CreateMany(ctx, t.Entries)
+		ents, err := entries.CreateMany(ctx, t.Entries)
 		if err != nil {
 			return err
 		}
-		created.Entries = entries
+		created.Entries = ents
+
+		for id, sums := range t.SumsByAccount() {
+			if err := balances.Apply(ctx, id, sums); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 

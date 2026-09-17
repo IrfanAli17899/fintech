@@ -101,6 +101,6 @@ func (r *EntryRepo) SumByAccount(ctx context.Context, accId uuid.UUID) (debits, 
 		return 0, 0, errdefs.Internalf(err, "sum entries for account")
 	}
 
-	return 0, 0, nil
+	return debits, credits, nil
 
 }

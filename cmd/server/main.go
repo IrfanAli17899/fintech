@@ -30,18 +30,22 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// accounts wiring
+	// repos
 	accRepo := repositories.NewAccountRepo(db.DB)
-	accSvc := services.NewAccountService(accRepo)
-	accHandler := handlers.NewAccountHandler(accSvc)
-	accHandler.RegisterRoutes(mux)
-
-	// transactions wiring
 	txnRepo := repositories.NewTransactionRepo(db.DB)
 	entryRepo := repositories.NewEntryRepo(db.DB)
-	ledgerSvc := services.NewLedgerService(db, accRepo, txnRepo, entryRepo)
-	txnHandler := handlers.NewTransactionHandler(ledgerSvc)
-	txnHandler.RegisterRoutes(mux)
+	balanceRepo := repositories.NewBalanceRepo(db.DB)
+
+	// accounts wiring
+	accSvc := services.NewAccountService(accRepo, entryRepo, balanceRepo)
+	handlers.NewAccountHandler(accSvc).RegisterRoutes(mux)
+
+	// transactions wiring
+	ledgerSvc := services.NewLedgerService(db, accRepo, txnRepo, entryRepo, balanceRepo)
+	handlers.NewTransactionHandler(ledgerSvc).RegisterRoutes(mux)
+
+	adminSvc := services.NewAdminService(db, balanceRepo)
+	handlers.NewAdminHandler(adminSvc).RegisterRoutes(mux)
 
 	// seeds
 	err = database.InTx(ctx, db.DB, func(tx *sql.Tx) error {

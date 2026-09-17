@@ -10,12 +10,17 @@ import (
 )
 
 type AccountService struct {
-	accRepo   *repositories.AccountRepo
-	entryRepo *repositories.EntryRepo
+	accRepo     *repositories.AccountRepo
+	entryRepo   *repositories.EntryRepo
+	balanceRepo *repositories.BalanceRepo
 }
 
-func NewAccountService(accRepo *repositories.AccountRepo, entryRepo *repositories.EntryRepo) *AccountService {
-	return &AccountService{accRepo, entryRepo}
+func NewAccountService(
+	accRepo *repositories.AccountRepo,
+	entryRepo *repositories.EntryRepo,
+	balanceRepo *repositories.BalanceRepo,
+) *AccountService {
+	return &AccountService{accRepo, entryRepo, balanceRepo}
 }
 
 func (s *AccountService) CreateAccount(ctx context.Context, a domain.Account) (*domain.Account, error) {
@@ -36,13 +41,13 @@ func (s *AccountService) GetAccountBalance(ctx context.Context, id uuid.UUID) (*
 		return nil, err
 	}
 
-	debits, credits, err := s.entryRepo.SumByAccount(ctx, id)
+	sums, err := s.balanceRepo.GetBalance(ctx, id)
 
 	if err != nil {
 		return nil, err
 	}
 
-	balance := acc.Type.NormalBalance(debits, credits)
+	balance := acc.Type.NormalBalance(sums.Debits, sums.Credits)
 	return &domain.Balance{
 		AccountID: id,
 		Currency:  acc.Currency,

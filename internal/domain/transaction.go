@@ -80,6 +80,20 @@ func (t Transaction) AccountIDs() []uuid.UUID {
 	return slices.Compact(ids)
 }
 
+func (t Transaction) SumsByAccount() map[uuid.UUID]AccountSums {
+	sums := make(map[uuid.UUID]AccountSums)
+	for _, e := range t.Entries {
+		s := sums[e.AccountID]
+		if e.Direction == EntryDirectionDebit {
+			s.Debits += e.Amount
+		} else {
+			s.Credits += e.Amount
+		}
+		sums[e.AccountID] = s
+	}
+	return sums
+}
+
 func (k TransactionKind) Valid() bool {
 	return validTransactionKinds[k]
 }
