@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 )
 
 type sumsResponse struct {

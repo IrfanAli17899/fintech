@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/irfanali17899/fintech/internal/domain"
-	"github.com/irfanali17899/fintech/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 

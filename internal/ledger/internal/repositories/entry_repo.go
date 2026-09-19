@@ -5,7 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
@@ -14,7 +14,7 @@ type EntryRepo struct {
 	db database.DBTX
 }
 
-func NewEntryRepo(db *sql.DB) *EntryRepo {
+func NewEntryRepo(db database.DBTX) *EntryRepo {
 	return &EntryRepo{db}
 }
 

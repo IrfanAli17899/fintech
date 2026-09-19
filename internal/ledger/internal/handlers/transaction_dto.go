@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 )
 
 type entryRequest struct {
@@ -44,14 +44,13 @@ type entryResponse struct {
 }
 
 type transactionResponse struct {
-	ID             uuid.UUID       `json:"id"`
-	Kind           string          `json:"kind"`
-	Status         string          `json:"status"`
-	IdempotencyKey string          `json:"idempotency_key"`
-	ReversesID     *uuid.UUID      `json:"reverses_id,omitempty"`
-	CreatedAt      time.Time       `json:"created_at"`
-	PostedAt       *time.Time      `json:"posted_at,omitempty"`
-	Entries        []entryResponse `json:"entries"`
+	ID         uuid.UUID       `json:"id"`
+	Kind       string          `json:"kind"`
+	Status     string          `json:"status"`
+	ReversesID *uuid.UUID      `json:"reverses_id,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	PostedAt   *time.Time      `json:"posted_at,omitempty"`
+	Entries    []entryResponse `json:"entries"`
 }
 
 func toTransactionResponse(t *domain.Transaction) *transactionResponse {
@@ -69,13 +68,12 @@ func toTransactionResponse(t *domain.Transaction) *transactionResponse {
 		}
 	}
 	return &transactionResponse{
-		ID:             t.ID,
-		Kind:           string(t.Kind),
-		Status:         string(t.Status),
-		IdempotencyKey: t.IdempotencyKey,
-		ReversesID:     t.ReversesID,
-		CreatedAt:      t.CreatedAt,
-		PostedAt:       t.PostedAt,
-		Entries:        entries,
+		ID:         t.ID,
+		Kind:       string(t.Kind),
+		Status:     string(t.Status),
+		ReversesID: t.ReversesID,
+		CreatedAt:  t.CreatedAt,
+		PostedAt:   t.PostedAt,
+		Entries:    entries,
 	}
 }

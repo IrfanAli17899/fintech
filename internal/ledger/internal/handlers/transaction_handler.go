@@ -3,7 +3,7 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/irfanali17899/fintech/internal/services"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 

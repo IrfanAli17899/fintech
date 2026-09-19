@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
@@ -15,7 +15,7 @@ type IdempotencyRepo struct {
 	db database.DBTX
 }
 
-func NewIdempotencyRepo(db *sql.DB) *IdempotencyRepo {
+func NewIdempotencyRepo(db database.DBTX) *IdempotencyRepo {
 	return &IdempotencyRepo{db}
 }
 

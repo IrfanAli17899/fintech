@@ -2,25 +2,27 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/domain"
-	"github.com/irfanali17899/fintech/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
+	"github.com/irfanali17899/fintech/pkg/database"
 )
 
 type AccountService struct {
+	txRunner    database.TxRunner
 	accRepo     *repositories.AccountRepo
-	entryRepo   *repositories.EntryRepo
 	balanceRepo *repositories.BalanceRepo
 }
 
 func NewAccountService(
+	txRunner database.TxRunner,
 	accRepo *repositories.AccountRepo,
-	entryRepo *repositories.EntryRepo,
 	balanceRepo *repositories.BalanceRepo,
 ) *AccountService {
-	return &AccountService{accRepo, entryRepo, balanceRepo}
+	return &AccountService{txRunner, accRepo, balanceRepo}
 }
 
 func (s *AccountService) CreateAccount(ctx context.Context, a domain.Account) (*domain.Account, error) {
@@ -62,4 +64,10 @@ func (s *AccountService) ListByOwner(ctx context.Context, ownerType domain.Owner
 		return nil, domain.ErrInvalidOwnerType(ownerType)
 	}
 	return s.accRepo.ListByOwner(ctx, ownerType, ownerID)
+}
+
+func (s *AccountService) SeedSystem(ctx context.Context) error {
+	return s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+		return s.accRepo.WithTx(tx).SeedAccounts(ctx)
+	})
 }
