@@ -35,13 +35,14 @@ func main() {
 	txnRepo := repositories.NewTransactionRepo(db.DB)
 	entryRepo := repositories.NewEntryRepo(db.DB)
 	balanceRepo := repositories.NewBalanceRepo(db.DB)
+	idemRepo := repositories.NewIdempotencyRepo(db.DB)
 
 	// accounts wiring
 	accSvc := services.NewAccountService(accRepo, entryRepo, balanceRepo)
 	handlers.NewAccountHandler(accSvc).RegisterRoutes(mux)
 
 	// transactions wiring
-	ledgerSvc := services.NewLedgerService(db, accRepo, txnRepo, entryRepo, balanceRepo)
+	ledgerSvc := services.NewLedgerService(db, accRepo, txnRepo, entryRepo, balanceRepo, idemRepo)
 	handlers.NewTransactionHandler(ledgerSvc).RegisterRoutes(mux)
 
 	adminSvc := services.NewAdminService(db, balanceRepo)

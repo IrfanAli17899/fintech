@@ -26,6 +26,11 @@ var (
 	CodeAmountTooLarge         = "AMOUNT_TOO_LARGE"
 	CodeCurrencyMismatch       = "CURRENCY_MISMATCH"
 	CodeAccountNetZero         = "ACCOUNT_NET_ZERO"
+
+	// idempotency
+	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
+	CodeIdempotencyKeyNotFound = "IDEMPOTENCY_KEY_NOT_FOUND"
+	CodeIdempotencyKeyReused   = "IDEMPOTENCY_KEY_REUSED"
 )
 
 // --- accounts ---
@@ -100,4 +105,20 @@ func ErrCurrencyMismatch(accountID uuid.UUID, got, want string) *errdefs.Error {
 func ErrAccountNetZero(id uuid.UUID) *errdefs.Error {
 	return errdefs.Validationf(CodeAccountNetZero,
 		"account %s has no net effect in this transaction", id)
+}
+
+// Internal signal from the repo that the key already exists; the service
+// turns this into a replay or an ErrIdempotencyKeyReused. Never reaches clients.
+func ErrIdempotencyKeyExists(key string) *errdefs.Error {
+	return errdefs.Conflictf(CodeIdempotencyKeyExists, "idempotency key %q already exists", key)
+}
+
+func ErrIdempotencyKeyNotFound(key string) *errdefs.Error {
+	return errdefs.NotFoundf(CodeIdempotencyKeyNotFound, "idempotency key %q not found", key)
+}
+
+// Same key, different payload — a client bug that must surface.
+func ErrIdempotencyKeyReused(key string) *errdefs.Error {
+	return errdefs.Validationf(CodeIdempotencyKeyReused,
+		"idempotency key %q was already used with a different request", key)
 }

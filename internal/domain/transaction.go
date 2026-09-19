@@ -2,7 +2,11 @@ package domain
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -152,4 +156,20 @@ func (t Transaction) Validate() error {
 	}
 
 	return nil
+}
+
+func (t *Transaction) Hash() string {
+	entries := make([]string, len(t.Entries))
+	for i, e := range t.Entries {
+		entries[i] = fmt.Sprintf("%s|%s|%d", e.AccountID, e.Direction, e.Amount)
+	}
+	sort.Strings(entries)
+
+	h := sha256.New()
+	h.Write([]byte(string(t.Kind)))
+	for _, e := range entries {
+		h.Write([]byte{'\n'})
+		h.Write([]byte(e))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/irfanali17899/fintech/internal/domain"
 	"github.com/irfanali17899/fintech/internal/repositories"
 	"github.com/irfanali17899/fintech/pkg/database"
+	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
 type LedgerService struct {
@@ -16,6 +17,7 @@ type LedgerService struct {
 	transactionRepo *repositories.TransactionRepo
 	entryRepo       *repositories.EntryRepo
 	balanceRepo     *repositories.BalanceRepo
+	idemRepo        *repositories.IdempotencyRepo
 }
 
 func NewLedgerService(
@@ -24,23 +26,47 @@ func NewLedgerService(
 	transactionRepo *repositories.TransactionRepo,
 	entryRepo *repositories.EntryRepo,
 	balanceRepo *repositories.BalanceRepo,
+	idemRepo *repositories.IdempotencyRepo,
 ) *LedgerService {
-	return &LedgerService{txRunner, accRepo, transactionRepo, entryRepo, balanceRepo}
+	return &LedgerService{txRunner, accRepo, transactionRepo, entryRepo, balanceRepo, idemRepo}
 }
 
-func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
-	if err := t.Validate(); err != nil {
-		return nil, err
+func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (created *domain.Transaction, replayed bool, err error) {
+	if err = t.Validate(); err != nil {
+		return nil, false, err
 	}
 
 	ids := t.AccountIDs()
-	var created *domain.Transaction
+	hash := t.Hash()
 
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+	err = s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
 		accounts := s.accRepo.WithTx(tx)
 		txns := s.transactionRepo.WithTx(tx)
 		entries := s.entryRepo.WithTx(tx)
 		balances := s.balanceRepo.WithTx(tx)
+		keys := s.idemRepo.WithTx(tx)
+
+		_, err := keys.Insert(ctx, t.IdempotencyKey, hash, domain.ResourceTransaction)
+		if errdefs.Is(err, domain.CodeIdempotencyKeyExists) {
+			existing, err := keys.Get(ctx, t.IdempotencyKey)
+			if err != nil {
+				return err
+			}
+			// same key sent with different payload, its a client bug.
+			if existing.RequestHash != hash {
+				return domain.ErrIdempotencyKeyReused(t.IdempotencyKey)
+			}
+			if existing.ResourceID == nil {
+				return errdefs.Internalf(nil, "idempotency key %s committed without resource", t.IdempotencyKey)
+			}
+			created, err = s.loadTransaction(ctx, txns, entries, *existing.ResourceID)
+			replayed = true
+			return err
+		}
+
+		if err != nil {
+			return err
+		}
 
 		accMap, err := accounts.GetByIDs(ctx, ids)
 		if err != nil {
@@ -82,27 +108,29 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 				return err
 			}
 		}
-		return nil
+		return keys.SetResource(ctx, t.IdempotencyKey, created.ID)
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return created, nil
+	return created, replayed, nil
+}
+
+// reusable as tx and non tx version
+func (s *LedgerService) loadTransaction(ctx context.Context, txns *repositories.TransactionRepo, ents *repositories.EntryRepo, id uuid.UUID) (*domain.Transaction, error) {
+	t, err := txns.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	t.Entries, err = ents.ListByTransaction(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 func (s *LedgerService) GetTransaction(ctx context.Context, id uuid.UUID) (*domain.Transaction, error) {
-	txn, err := s.transactionRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	entries, err := s.entryRepo.ListByTransaction(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	txn.Entries = entries
-	return txn, nil
-
+	return s.loadTransaction(ctx, s.transactionRepo, s.entryRepo, id)
 }

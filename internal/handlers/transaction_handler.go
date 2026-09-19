@@ -36,6 +36,11 @@ func (h *TransactionHandler) CreateTransaction(w http.ResponseWriter, r *http.Re
 		httpx.WriteError(w, err)
 		return
 	}
-	tx, err := h.ledgerSvc.Post(r.Context(), req.toDomain())
-	httpx.Created(w, toTransactionResponse(tx), err)
+
+	t, replayed, err := h.ledgerSvc.Post(r.Context(), req.toDomain())
+	if replayed {
+		httpx.OK(w, toTransactionResponse(t), err)
+		return
+	}
+	httpx.Created(w, toTransactionResponse(t), err)
 }
