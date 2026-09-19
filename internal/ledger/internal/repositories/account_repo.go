@@ -69,24 +69,27 @@ func (r *AccountRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Accoun
 	return &a, nil
 }
 
-func (r *AccountRepo) SeedAccounts(ctx context.Context) error {
+func (r *AccountRepo) SeedAccounts(ctx context.Context) ([]uuid.UUID, error) {
 	seeds := []domain.Account{
 		{OwnerType: domain.OwnerSystem, OwnerID: "cash_at_bank", Currency: "PKR", Type: domain.AccountAsset},
 		{OwnerType: domain.OwnerSystem, OwnerID: "fees", Currency: "PKR", Type: domain.AccountRevenue},
 	}
 
-	for _, s := range seeds {
-		_, err := r.db.ExecContext(ctx,
+	ids := make([]uuid.UUID, len(seeds))
+
+	for i, s := range seeds {
+		err := r.db.QueryRowContext(ctx,
 			`INSERT INTO accounts (owner_type, owner_id, currency, type)
 			 VALUES ($1, $2, $3, $4)
-			 ON CONFLICT (owner_type, owner_id, currency, type) DO NOTHING`,
+			 ON CONFLICT (owner_type, owner_id, currency, type) DO UPDATE SET owner_id = EXCLUDED.owner_id RETURNING id`,
 			s.OwnerType, s.OwnerID, s.Currency, s.Type,
-		)
+		).Scan(&ids[i])
+
 		if err != nil {
-			return errdefs.Internalf(err, "seed account %s", s.OwnerID)
+			return nil, errdefs.Internalf(err, "seed account %s", s.OwnerID)
 		}
 	}
-	return nil
+	return ids, nil
 }
 
 func (r *AccountRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]domain.Account, error) {

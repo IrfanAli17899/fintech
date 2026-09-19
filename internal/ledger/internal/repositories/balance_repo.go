@@ -126,3 +126,35 @@ func (r *BalanceRepo) Verify(ctx context.Context) ([]domain.BalanceMismatch, err
 
 	return m, nil
 }
+
+// LockAndGet locks the balance rows for ids and returns their sums.
+// ids must be sorted so concurrent callers acquire locks in the same order.
+// Only meaningful inside a transaction.
+func (r *BalanceRepo) LockAndGet(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]domain.AccountSums, error) {
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT account_id, debits, credits FROM balances WHERE account_id = ANY($1)
+	ORDER BY account_id
+	FOR UPDATE
+	`, ids)
+
+	if err != nil {
+		return nil, errdefs.Internalf(err, "lock balances")
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]domain.AccountSums, len(ids))
+
+	for rows.Next() {
+		var id uuid.UUID
+		var s domain.AccountSums
+		if err := rows.Scan(&id, &s.Debits, &s.Credits); err != nil {
+			return nil, errdefs.Internalf(err, "scan locked balance")
+		}
+		out[id] = s
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "lock balances rows")
+	}
+	return out, nil
+}

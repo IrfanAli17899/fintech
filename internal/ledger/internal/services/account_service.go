@@ -29,7 +29,27 @@ func (s *AccountService) CreateAccount(ctx context.Context, a domain.Account) (*
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}
-	return s.accRepo.Create(ctx, a)
+
+	var created *domain.Account
+
+	// create account and its zero balance row
+	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+		accounts := s.accRepo.WithTx(tx)
+		balances := s.balanceRepo.WithTx(tx)
+
+		acc, err := accounts.Create(ctx, a)
+		if err != nil {
+			return err
+		}
+		created = acc
+		return balances.Apply(ctx, created.ID, domain.AccountSums{})
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return created, nil
 }
 
 func (s *AccountService) GetAccount(ctx context.Context, id uuid.UUID) (*domain.Account, error) {
@@ -68,6 +88,18 @@ func (s *AccountService) ListByOwner(ctx context.Context, ownerType domain.Owner
 
 func (s *AccountService) SeedSystem(ctx context.Context) error {
 	return s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		return s.accRepo.WithTx(tx).SeedAccounts(ctx)
+		accounts := s.accRepo.WithTx(tx)
+		balances := s.balanceRepo.WithTx(tx)
+
+		ids, err := accounts.SeedAccounts(ctx)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := balances.Apply(ctx, id, domain.AccountSums{}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

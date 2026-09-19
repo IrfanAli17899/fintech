@@ -26,6 +26,7 @@ var (
 	CodeAmountTooLarge         = "AMOUNT_TOO_LARGE"
 	CodeCurrencyMismatch       = "CURRENCY_MISMATCH"
 	CodeAccountNetZero         = "ACCOUNT_NET_ZERO"
+	CodeInsufficientFunds      = "INSUFFICIENT_FUNDS"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -105,6 +106,11 @@ func ErrCurrencyMismatch(accountID uuid.UUID, got, want string) *errdefs.Error {
 func ErrAccountNetZero(id uuid.UUID) *errdefs.Error {
 	return errdefs.Validationf(CodeAccountNetZero,
 		"account %s has no net effect in this transaction", id)
+}
+
+func ErrInsufficientFunds(id uuid.UUID, available, requested int64) *errdefs.Error {
+	return errdefs.Validationf(CodeInsufficientFunds,
+		"account %s has %d available, %d requested", id, available, requested)
 }
 
 // Internal signal from the repo that the key already exists; the service
