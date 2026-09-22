@@ -2,8 +2,6 @@ package domain
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -159,17 +157,71 @@ func (t Transaction) Validate() error {
 }
 
 func (t *Transaction) Hash() string {
-	entries := make([]string, len(t.Entries))
+	legs := make([]string, len(t.Entries))
 	for i, e := range t.Entries {
-		entries[i] = fmt.Sprintf("%s|%s|%d", e.AccountID, e.Direction, e.Amount)
+		legs[i] = fmt.Sprintf("%s|%s|%d", e.AccountID, e.Direction, e.Amount)
 	}
-	sort.Strings(entries)
+	sort.Strings(legs)
+	return HashOf(append([]string{string(t.Kind)}, legs...)...)
+}
 
-	h := sha256.New()
-	h.Write([]byte(string(t.Kind)))
-	for _, e := range entries {
-		h.Write([]byte{'\n'})
-		h.Write([]byte(e))
+// Total is the value moved by the transaction: the sum of its debits
+// (equal to the sum of its credits).
+func (t Transaction) Total() int64 {
+	var total int64
+	for _, e := range t.Entries {
+		if e.Direction == EntryDirectionDebit {
+			total += e.Amount
+		}
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return total
+}
+
+// Reverse returns entries that undo amount of what remains of t after prior
+// reversals (reversed maps account → amount already reversed on that leg).
+// Every direction is flipped and each remaining leg is scaled proportionally;
+// when amount equals the remaining total every leg reverses exactly, with no rounding.
+func (t Transaction) Reverse(amount int64, reversed map[uuid.UUID]int64) []Entry {
+	var remainingTotal int64
+	for _, e := range t.Entries {
+		if e.Direction == EntryDirectionDebit {
+			remainingTotal += e.Amount - reversed[e.AccountID]
+		}
+	}
+
+	out := make([]Entry, 0, len(t.Entries))
+	for _, e := range t.Entries {
+		remaining := e.Amount - reversed[e.AccountID]
+		scaled := remaining * amount / remainingTotal
+		if scaled == 0 {
+			continue
+		}
+		dir := EntryDirectionDebit
+		if e.Direction == EntryDirectionDebit {
+			dir = EntryDirectionCredit
+		}
+		out = append(out, Entry{AccountID: e.AccountID, Amount: scaled, Direction: dir})
+	}
+
+	fixShortfall(out, EntryDirectionDebit, amount)
+	fixShortfall(out, EntryDirectionCredit, amount)
+	return out
+}
+
+// fixShortfall adds any rounding gap on one side to that side's largest entry. // remainder
+func fixShortfall(entries []Entry, dir EntryDirection, want int64) {
+	var sum int64
+	largest := -1
+	for i, e := range entries {
+		if e.Direction != dir {
+			continue
+		}
+		sum += e.Amount
+		if largest < 0 || e.Amount > entries[largest].Amount {
+			largest = i
+		}
+	}
+	if largest >= 0 && sum < want {
+		entries[largest].Amount += want - sum
+	}
 }

@@ -15,18 +15,20 @@ var (
 	CodeOwnerIDRequired    = "OWNER_ID_REQUIRED"
 
 	// transactions
-	CodeTransactionExists      = "TRANSACTION_EXISTS"
-	CodeTransactionNotFound    = "TRANSACTION_NOT_FOUND"
-	CodeTransactionUnbalanced  = "TRANSACTION_UNBALANCED"
-	CodeInvalidTransactionKind = "INVALID_TRANSACTION_KIND"
-	CodeIdempotencyKeyRequired = "IDEMPOTENCY_KEY_REQUIRED"
-	CodeTooFewEntries          = "TOO_FEW_ENTRIES"
-	CodeInvalidEntryDirection  = "INVALID_ENTRY_DIRECTION"
-	CodeInvalidAmount          = "INVALID_AMOUNT"
-	CodeAmountTooLarge         = "AMOUNT_TOO_LARGE"
-	CodeCurrencyMismatch       = "CURRENCY_MISMATCH"
-	CodeAccountNetZero         = "ACCOUNT_NET_ZERO"
-	CodeInsufficientFunds      = "INSUFFICIENT_FUNDS"
+	CodeTransactionExists        = "TRANSACTION_EXISTS"
+	CodeTransactionNotFound      = "TRANSACTION_NOT_FOUND"
+	CodeTransactionUnbalanced    = "TRANSACTION_UNBALANCED"
+	CodeInvalidTransactionKind   = "INVALID_TRANSACTION_KIND"
+	CodeIdempotencyKeyRequired   = "IDEMPOTENCY_KEY_REQUIRED"
+	CodeTooFewEntries            = "TOO_FEW_ENTRIES"
+	CodeInvalidEntryDirection    = "INVALID_ENTRY_DIRECTION"
+	CodeInvalidAmount            = "INVALID_AMOUNT"
+	CodeAmountTooLarge           = "AMOUNT_TOO_LARGE"
+	CodeCurrencyMismatch         = "CURRENCY_MISMATCH"
+	CodeAccountNetZero           = "ACCOUNT_NET_ZERO"
+	CodeInsufficientFunds        = "INSUFFICIENT_FUNDS"
+	CodeTransactionNotReversible = "TRANSACTION_NOT_REVERSIBLE"
+	CodeReversalExceedsOriginal  = "REVERSAL_EXCEEDS_ORIGINAL"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -111,6 +113,16 @@ func ErrAccountNetZero(id uuid.UUID) *errdefs.Error {
 func ErrInsufficientFunds(id uuid.UUID, available, requested int64) *errdefs.Error {
 	return errdefs.Validationf(CodeInsufficientFunds,
 		"account %s has %d available, %d requested", id, available, requested)
+}
+
+func ErrTransactionNotReversible(id uuid.UUID, status TransactionStatus) *errdefs.Error {
+	return errdefs.Validationf(CodeTransactionNotReversible,
+		"transaction %s is %s; only posted transactions can be reversed", id, status)
+}
+
+func ErrReversalExceedsOriginal(id uuid.UUID, remaining, requested int64) *errdefs.Error {
+	return errdefs.Validationf(CodeReversalExceedsOriginal,
+		"transaction %s has %d remaining to reverse, %d requested", id, remaining, requested)
 }
 
 // Internal signal from the repo that the key already exists; the service

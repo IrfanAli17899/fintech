@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
 )
 
 type entryRequest struct {
@@ -51,6 +52,20 @@ type transactionResponse struct {
 	CreatedAt  time.Time       `json:"created_at"`
 	PostedAt   *time.Time      `json:"posted_at,omitempty"`
 	Entries    []entryResponse `json:"entries"`
+}
+
+
+type reverseTransactionRequest struct {
+	IdempotencyKey string `json:"idempotency_key"`
+	Amount         int64  `json:"amount,omitempty"` // 0 or omitted = full reversal
+}
+
+func (r reverseTransactionRequest) toCommand(originalID uuid.UUID) services.ReverseCommand {
+	return services.ReverseCommand{
+		OriginalID:     originalID,
+		Amount:         r.Amount,
+		IdempotencyKey: r.IdempotencyKey,
+	}
 }
 
 func toTransactionResponse(t *domain.Transaction) *transactionResponse {

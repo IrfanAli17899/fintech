@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
@@ -64,14 +65,7 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 			return err
 		}
 
-		accMap, err := s.resolveAccounts(ctx, r, t)
-		if err != nil {
-			return err
-		}
-		if err := s.checkFunds(ctx, r, t, accMap); err != nil {
-			return err
-		}
-		created, err = s.write(ctx, r, t)
+		created, err = s.post(ctx, r, t)
 		if err != nil {
 			return err
 		}
@@ -83,13 +77,102 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 	return created, replayed, nil
 }
 
+// ReverseCommand asks for a full (Amount == 0) or partial reversal of a posted transaction.
+type ReverseCommand struct {
+	OriginalID     uuid.UUID
+	Amount         int64
+	IdempotencyKey string
+}
+
+// Reverse posts a refund transaction that undoes all or part of the original.
+// The original is locked for the duration so concurrent partial reversals
+// cannot together exceed its total.
+func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domain.Transaction, bool, error) {
+	var (
+		created  *domain.Transaction
+		replayed bool
+	)
+
+	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+		r := s.repos(tx)
+
+		hash := domain.HashOf("reversal", cmd.OriginalID.String(), strconv.FormatInt(cmd.Amount, 10))
+		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
+		if err != nil {
+			return err
+		}
+		if rp != nil {
+			created, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			replayed = true
+			return err
+		}
+
+		original, err := r.txns.LockByID(ctx, cmd.OriginalID)
+		if err != nil {
+			return err
+		}
+		if original.Status != domain.TransactionStatusPosted {
+			return domain.ErrTransactionNotReversible(original.ID, original.Status)
+		}
+		original.Entries, err = r.entries.ListByTransaction(ctx, original.ID)
+		if err != nil {
+			return err
+		}
+
+		reversedBy, err := r.txns.ReversedByAccount(ctx, original.ID)
+		if err != nil {
+			return err
+		}
+		var reversed int64
+		for _, e := range original.Entries {
+			if e.Direction == domain.EntryDirectionDebit {
+				reversed += reversedBy[e.AccountID]
+			}
+		}
+		total := original.Total()
+		amount := cmd.Amount
+		if amount == 0 {
+			amount = total - reversed
+		}
+		if amount <= 0 || reversed+amount > total {
+			return domain.ErrReversalExceedsOriginal(original.ID, total-reversed, amount)
+		}
+
+		t := domain.Transaction{
+			Kind:           domain.TransactionKindRefund,
+			IdempotencyKey: cmd.IdempotencyKey,
+			ReversesID:     &original.ID,
+			Entries:        original.Reverse(amount, reversedBy),
+		}
+		if err := t.Validate(); err != nil {
+			return err
+		}
+
+		created, err = s.post(ctx, r, t)
+		if err != nil {
+			return err
+		}
+
+		if reversed+amount == total {
+			if err := r.txns.MarkReversed(ctx, original.ID); err != nil {
+				return err
+			}
+		}
+		return r.keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return created, replayed, nil
+}
+
 func (s *LedgerService) GetTransaction(ctx context.Context, id uuid.UUID) (*domain.Transaction, error) {
 	return s.loadTransaction(ctx, s.transactionRepo, s.entryRepo, id)
 }
 
-// ---- posting steps ----
+// ---- posting pipeline ----
 
-// txRepos is the set of repositories bound to one transaction.
+// txRepos is the set of repositories bound to one database transaction.
 type txRepos struct {
 	accounts *repositories.AccountRepo
 	txns     *repositories.TransactionRepo
@@ -106,6 +189,20 @@ func (s *LedgerService) repos(tx *sql.Tx) txRepos {
 		balances: s.balanceRepo.WithTx(tx),
 		keys:     s.idemRepo.WithTx(tx),
 	}
+}
+
+// post runs a validated transaction through account resolution, the overdraft
+// check, and persistence. The caller owns the tx, the idempotency claim, and
+// any follow-up such as status flips or key linking.
+func (s *LedgerService) post(ctx context.Context, r txRepos, t domain.Transaction) (*domain.Transaction, error) {
+	accMap, err := s.resolveAccounts(ctx, r, t)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkFunds(ctx, r, t, accMap); err != nil {
+		return nil, err
+	}
+	return s.write(ctx, r, t)
 }
 
 // resolveAccounts loads every account the transaction touches and enforces
