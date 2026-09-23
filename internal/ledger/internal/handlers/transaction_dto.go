@@ -16,6 +16,7 @@ type entryRequest struct {
 
 type createTransactionRequest struct {
 	Kind           string         `json:"kind"`
+	Status         string         `json:"status,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`
 	Entries        []entryRequest `json:"entries"`
 }
@@ -31,6 +32,7 @@ func (r createTransactionRequest) toDomain() domain.Transaction {
 	}
 	return domain.Transaction{
 		Kind:           domain.TransactionKind(r.Kind),
+		Status:         domain.TransactionStatus(r.Status),
 		IdempotencyKey: r.IdempotencyKey,
 		Entries:        entries,
 	}
@@ -53,7 +55,6 @@ type transactionResponse struct {
 	PostedAt   *time.Time      `json:"posted_at,omitempty"`
 	Entries    []entryResponse `json:"entries"`
 }
-
 
 type reverseTransactionRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`

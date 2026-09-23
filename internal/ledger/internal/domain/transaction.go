@@ -84,12 +84,19 @@ func (t Transaction) AccountIDs() []uuid.UUID {
 
 func (t Transaction) SumsByAccount() map[uuid.UUID]AccountSums {
 	sums := make(map[uuid.UUID]AccountSums)
+	isPending := t.Status == TransactionStatusPending
 	for _, e := range t.Entries {
 		s := sums[e.AccountID]
+
+		debitTarget, creditTarget := &s.Debits, &s.Credits
+		if isPending {
+			debitTarget, creditTarget = &s.PendingDebits, &s.PendingCredits
+		}
+
 		if e.Direction == EntryDirectionDebit {
-			s.Debits += e.Amount
+			*debitTarget += e.Amount
 		} else {
-			s.Credits += e.Amount
+			*creditTarget += e.Amount
 		}
 		sums[e.AccountID] = s
 	}
@@ -116,6 +123,8 @@ func (t Transaction) Validate() error {
 		return ErrIdempotencyKeyRequired()
 	case len(t.Entries) < 2:
 		return ErrTooFewEntries(len(t.Entries))
+	case t.Status != TransactionStatusPending && t.Status != TransactionStatusPosted:
+		return ErrInvalidTransactionStatus(t.Status)
 	}
 
 	var debits, credits int64

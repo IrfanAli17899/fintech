@@ -21,13 +21,14 @@ func NewBalanceRepo(db database.DBTX) *BalanceRepo {
 
 func (r *BalanceRepo) WithTx(tx *sql.Tx) *BalanceRepo { return &BalanceRepo{db: tx} }
 
-const balanceColumns = `account_id, debits, credits, updated_at`
+const sumColumns = `debits, credits, pending_debits, pending_credits`
+const balanceColumns = `account_id, ` + sumColumns + `, updated_at`
 
 func (r *BalanceRepo) GetBalance(ctx context.Context, accountID uuid.UUID) (*domain.AccountSums, error) {
 	var s domain.AccountSums
 	err := r.db.QueryRowContext(ctx,
-		`SELECT debits, credits from balances where account_id=$1`,
-		accountID).Scan(&s.Debits, &s.Credits)
+		`SELECT `+sumColumns+` FROM balances WHERE account_id=$1`,
+		accountID).Scan(&s.Debits, &s.Credits, &s.PendingDebits, &s.PendingCredits)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &domain.AccountSums{}, nil
@@ -41,14 +42,16 @@ func (r *BalanceRepo) GetBalance(ctx context.Context, accountID uuid.UUID) (*dom
 
 func (r *BalanceRepo) Apply(ctx context.Context, accountID uuid.UUID, s domain.AccountSums) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO balances (account_id, debits, credits)
-		VALUES ($1, $2, $3)
+		`INSERT INTO balances (account_id, debits, credits, pending_debits, pending_credits)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (account_id) DO UPDATE
 		SET debits = balances.debits  + EXCLUDED.debits,
 		credits = balances.credits + EXCLUDED.credits,
+		pending_debits = balances.pending_debits  + EXCLUDED.pending_debits,
+		pending_credits = balances.pending_credits + EXCLUDED.pending_credits,
 		updated_at = now()
 		`,
-		accountID, s.Debits, s.Credits,
+		accountID, s.Debits, s.Credits, s.PendingDebits, s.PendingCredits,
 	)
 
 	if err != nil {
@@ -58,24 +61,25 @@ func (r *BalanceRepo) Apply(ctx context.Context, accountID uuid.UUID, s domain.A
 	return nil
 }
 
+const liveBalancesCTE = `
+	SELECT e.account_id,
+	COALESCE(SUM(CASE WHEN t.status = 'posted'  AND e.direction = 'debit'  THEN e.amount END), 0) AS debits,
+	COALESCE(SUM(CASE WHEN t.status = 'posted'  AND e.direction = 'credit' THEN e.amount END), 0) AS credits,
+	COALESCE(SUM(CASE WHEN t.status = 'pending' AND e.direction = 'debit'  THEN e.amount END), 0) AS pending_debits,
+	COALESCE(SUM(CASE WHEN t.status = 'pending' AND e.direction = 'credit' THEN e.amount END), 0) AS pending_credits
+	FROM entries e
+	JOIN transactions t ON t.id = e.transaction_id
+	WHERE t.status IN ('posted', 'pending')
+	GROUP BY e.account_id
+`
+
 func (r *BalanceRepo) RebuildAll(ctx context.Context) error {
 	if _, err := r.db.ExecContext(ctx, `TRUNCATE balances`); err != nil {
-		return errdefs.Internalf(err, "truncate balance table for rebuild")
+		return errdefs.Internalf(err, "truncate balances")
 	}
 
-	_, err := r.db.ExecContext(ctx, `
-	INSERT INTO balances (account_id, debits, credits)
-	SELECT 
-		e.account_id,
-		COALESCE(SUM(CASE WHEN direction='debit' THEN amount END),0),
-		COALESCE(SUM(CASE WHEN direction='credit' THEN amount END),0)
-	FROM entries e
-	JOIN transactions t ON e.transaction_id = t.id
-	WHERE t.status = 'posted'
-	GROUP BY e.account_id
-	`)
-
-	if err != nil {
+	if _, err := r.db.ExecContext(ctx,
+		`INSERT INTO balances (account_id, `+sumColumns+`) `+liveBalancesCTE); err != nil {
 		return errdefs.Internalf(err, "rebuild balances")
 	}
 	return nil
@@ -83,25 +87,19 @@ func (r *BalanceRepo) RebuildAll(ctx context.Context) error {
 
 func (r *BalanceRepo) Verify(ctx context.Context) ([]domain.BalanceMismatch, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	WITH live AS (
-		SELECT e.account_id,
-				COALESCE(SUM(CASE WHEN e.direction = 'debit'  THEN e.amount END), 0) AS debits,
-				COALESCE(SUM(CASE WHEN e.direction = 'credit' THEN e.amount END), 0) AS credits
-		FROM entries e
-		JOIN transactions t ON t.id = e.transaction_id
-		WHERE t.status = 'posted'
-		GROUP BY e.account_id
-	)
+	WITH live AS (`+liveBalancesCTE+`)
 	SELECT COALESCE(b.account_id, l.account_id) AS account_id,
-		COALESCE(b.debits, 0)                AS cached_debits,
-		COALESCE(b.credits, 0)               AS cached_credits,
-		COALESCE(l.debits, 0)                AS live_debits,
-		COALESCE(l.credits, 0)               AS live_credits
+		COALESCE(b.debits, 0),          COALESCE(b.credits, 0),
+		COALESCE(b.pending_debits, 0),  COALESCE(b.pending_credits, 0),
+		COALESCE(l.debits, 0),          COALESCE(l.credits, 0),
+		COALESCE(l.pending_debits, 0),  COALESCE(l.pending_credits, 0)
 	FROM balances b
 	FULL OUTER JOIN live l ON l.account_id = b.account_id
-	WHERE COALESCE(b.debits, 0)  <> COALESCE(l.debits, 0)
-	OR COALESCE(b.credits, 0) <> COALESCE(l.credits, 0)
-	ORDER BY account_id;
+	WHERE COALESCE(b.debits, 0)          <> COALESCE(l.debits, 0)
+	OR COALESCE(b.credits, 0)         <> COALESCE(l.credits, 0)
+	OR COALESCE(b.pending_debits, 0)  <> COALESCE(l.pending_debits, 0)
+	OR COALESCE(b.pending_credits, 0) <> COALESCE(l.pending_credits, 0)
+	ORDER BY account_id
 	`)
 
 	if err != nil {
@@ -113,7 +111,9 @@ func (r *BalanceRepo) Verify(ctx context.Context) ([]domain.BalanceMismatch, err
 
 	for rows.Next() {
 		o := domain.BalanceMismatch{}
-		err := rows.Scan(&o.AccountID, &o.Cached.Debits, &o.Cached.Credits, &o.Live.Debits, &o.Live.Credits)
+		err := rows.Scan(&o.AccountID,
+			&o.Cached.Debits, &o.Cached.Credits, &o.Cached.PendingDebits, &o.Cached.PendingCredits,
+			&o.Live.Debits, &o.Live.Credits, &o.Live.PendingDebits, &o.Live.PendingCredits)
 		if err != nil {
 			return nil, errdefs.Internalf(err, "verify balances scan")
 		}
@@ -132,7 +132,7 @@ func (r *BalanceRepo) Verify(ctx context.Context) ([]domain.BalanceMismatch, err
 // Only meaningful inside a transaction.
 func (r *BalanceRepo) LockAndGet(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]domain.AccountSums, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	SELECT account_id, debits, credits FROM balances WHERE account_id = ANY($1)
+	SELECT account_id, `+sumColumns+` FROM balances WHERE account_id = ANY($1)
 	ORDER BY account_id
 	FOR UPDATE
 	`, ids)
@@ -147,7 +147,7 @@ func (r *BalanceRepo) LockAndGet(ctx context.Context, ids []uuid.UUID) (map[uuid
 	for rows.Next() {
 		var id uuid.UUID
 		var s domain.AccountSums
-		if err := rows.Scan(&id, &s.Debits, &s.Credits); err != nil {
+		if err := rows.Scan(&id, &s.Debits, &s.Credits, &s.PendingDebits, &s.PendingCredits); err != nil {
 			return nil, errdefs.Internalf(err, "scan locked balance")
 		}
 		out[id] = s

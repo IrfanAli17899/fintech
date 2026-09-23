@@ -29,6 +29,7 @@ var (
 	CodeInsufficientFunds        = "INSUFFICIENT_FUNDS"
 	CodeTransactionNotReversible = "TRANSACTION_NOT_REVERSIBLE"
 	CodeReversalExceedsOriginal  = "REVERSAL_EXCEEDS_ORIGINAL"
+	CodeInvalidTransactionStatus = "INVALID_TRANSACTION_STATUS"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -123,6 +124,11 @@ func ErrTransactionNotReversible(id uuid.UUID, status TransactionStatus) *errdef
 func ErrReversalExceedsOriginal(id uuid.UUID, remaining, requested int64) *errdefs.Error {
 	return errdefs.Validationf(CodeReversalExceedsOriginal,
 		"transaction %s has %d remaining to reverse, %d requested", id, remaining, requested)
+}
+
+func ErrInvalidTransactionStatus(s TransactionStatus) *errdefs.Error {
+	return errdefs.Validationf(CodeInvalidTransactionStatus,
+		"transaction status %q is not valid for posting; use pending or posted", s)
 }
 
 // Internal signal from the repo that the key already exists; the service

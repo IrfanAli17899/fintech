@@ -6,8 +6,10 @@ import (
 )
 
 type sumsResponse struct {
-	Debits  int64 `json:"debits"`
-	Credits int64 `json:"credits"`
+	Debits         int64 `json:"debits"`
+	Credits        int64 `json:"credits"`
+	PendingDebits  int64 `json:"pending_debits"`
+	PendingCredits int64 `json:"pending_credits"`
 }
 
 type balanceMismatchResponse struct {

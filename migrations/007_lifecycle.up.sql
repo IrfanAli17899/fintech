@@ -1,0 +1,6 @@
+ALTER TABLE entries ADD COLUMN seq BIGSERIAL;
+CREATE UNIQUE INDEX entries_seq_idx ON entries(seq);
+
+ALTER TABLE balances
+  ADD COLUMN pending_debits  BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN pending_credits BIGINT NOT NULL DEFAULT 0;

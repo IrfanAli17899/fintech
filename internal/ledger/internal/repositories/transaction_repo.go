@@ -23,9 +23,9 @@ func (r *TransactionRepo) WithTx(tx *sql.Tx) *TransactionRepo { return &Transact
 
 func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
 	err := r.db.QueryRowContext(ctx,
-		`INSERT INTO transactions (kind, reverses_id) 
-		VALUES ($1,$2) RETURNING id, status, created_at, posted_at`,
-		t.Kind, t.ReversesID,
+		`INSERT INTO transactions (kind, status, reverses_id, posted_at) 
+		VALUES ($1, $2, $3, CASE WHEN $2::transaction_status = 'posted' THEN now() END) RETURNING id, status, created_at, posted_at`,
+		t.Kind, t.Status, t.ReversesID,
 	).Scan(&t.ID, &t.Status, &t.CreatedAt, &t.PostedAt)
 
 	if err != nil {

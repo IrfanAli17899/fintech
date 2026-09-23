@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-type AccountSums struct{ Debits, Credits int64 }
+type AccountSums struct{ Debits, Credits, PendingDebits, PendingCredits int64 }
 
 type Balance struct {
 	AccountID uuid.UUID
