@@ -43,6 +43,9 @@ func NewLedgerService(
 // Post records a balanced transaction atomically. The bool is true when the
 // idempotency key had already been used and the original transaction is returned.
 func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain.Transaction, bool, error) {
+	if t.Status == "" {
+		t.Status = domain.TransactionStatusPosted
+	}
 	if err := t.Validate(); err != nil {
 		return nil, false, err
 	}
@@ -140,6 +143,7 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 
 		t := domain.Transaction{
 			Kind:           domain.TransactionKindRefund,
+			Status:         domain.TransactionStatusPosted, // ← add this
 			IdempotencyKey: cmd.IdempotencyKey,
 			ReversesID:     &original.ID,
 			Entries:        original.Reverse(amount, reversedBy),
@@ -239,12 +243,12 @@ func (s *LedgerService) checkFunds(ctx context.Context, r txRepos, t domain.Tran
 	}
 	for id, sums := range t.SumsByAccount() {
 		acc := accMap[id]
-		if sums.Debits == 0 || acc.Type != domain.AccountLiability {
+		requested := sums.Debits + sums.PendingDebits
+		if requested == 0 || acc.Type != domain.AccountLiability {
 			continue
 		}
-		available := acc.Type.NormalBalance(locked[id].Debits, locked[id].Credits)
-		if available < sums.Debits {
-			return domain.ErrInsufficientFunds(id, available, sums.Debits)
+		if available := acc.Type.Balance(locked[id]).Available; available < requested {
+			return domain.ErrInsufficientFunds(id, available, requested)
 		}
 	}
 	return nil

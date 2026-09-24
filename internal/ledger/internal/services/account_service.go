@@ -69,13 +69,10 @@ func (s *AccountService) GetAccountBalance(ctx context.Context, id uuid.UUID) (*
 		return nil, err
 	}
 
-	balance := acc.Type.NormalBalance(sums.Debits, sums.Credits)
-	return &domain.Balance{
-		AccountID: id,
-		Currency:  acc.Currency,
-		Amount:    balance,
-		AsOf:      time.Now(),
-	}, nil
+	b := acc.Type.Balance(*sums)
+	b.AccountID, b.Currency, b.AsOf = id, acc.Currency, time.Now()
+
+	return &b, nil
 
 }
 

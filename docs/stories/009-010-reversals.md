@@ -31,3 +31,6 @@
   explicit entries instead, e.g. to keep the platform fee on partial refunds
 - status flip on the original is a denormalized "nothing left" flag, the one
   UPDATE story 4 permits; the money movement itself is immutable
+- a reversed transaction is still posted money: its entries count toward every
+  balance and sum; only `voided` means "never happened". `reversed` is a
+  denormalized "nothing left to reverse" flag for listing and clearer errors

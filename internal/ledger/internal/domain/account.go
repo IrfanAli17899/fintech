@@ -38,16 +38,34 @@ type Account struct {
 	CreatedAt time.Time
 }
 
-func (t AccountType) NormalBalance(debits, credits int64) int64 {
+// Balance derives the account's balance figures from raw sums, signed by its
+// normal balance. "In" is the direction that increases the account, "out" the
+// direction that decreases it. Available deducts only outgoing holds: incoming
+// pending funds are a promise, not money.
+// AccountLiability, AccountRevenue: grow on credits so that's why its credits - debits
+// AccountAsset, AccountExpense: grow on debits so that's why its debits - credits
+func (t AccountType) Balance(s AccountSums) Balance {
 	switch t {
-	case AccountAsset, AccountExpense:
-		return debits - credits
 	case AccountLiability, AccountRevenue:
-		return credits - debits
+		posted := s.Credits - s.Debits
+		return Balance{
+			Posted:     posted,
+			PendingIn:  s.PendingCredits,
+			PendingOut: s.PendingDebits,
+			Available:  posted - s.PendingDebits,
+		}
+	case AccountAsset, AccountExpense:
+		posted := s.Debits - s.Credits
+		return Balance{
+			Posted:     posted,
+			PendingIn:  s.PendingDebits,
+			PendingOut: s.PendingCredits,
+			Available:  posted - s.PendingCredits,
+		}
+	default:
+		panic(fmt.Sprintf("unknown account type %q", t))
 	}
-	panic(fmt.Sprintf("unknown account type %q", t))
 }
-
 func (t AccountType) Valid() bool {
 	return validAccountType[t]
 }

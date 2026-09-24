@@ -61,15 +61,18 @@ func (r *BalanceRepo) Apply(ctx context.Context, accountID uuid.UUID, s domain.A
 	return nil
 }
 
+// reversed is a view on a posted transaction, never a change to what it did. Every place that sums money must treat it as posted
+// its a product status for posted refunds without subquery
+
 const liveBalancesCTE = `
 	SELECT e.account_id,
-	COALESCE(SUM(CASE WHEN t.status = 'posted'  AND e.direction = 'debit'  THEN e.amount END), 0) AS debits,
-	COALESCE(SUM(CASE WHEN t.status = 'posted'  AND e.direction = 'credit' THEN e.amount END), 0) AS credits,
+	COALESCE(SUM(CASE WHEN t.status IN ('posted','reversed') AND e.direction = 'debit'  THEN e.amount END), 0) AS debits,
+	COALESCE(SUM(CASE WHEN t.status IN ('posted','reversed') AND e.direction = 'credit' THEN e.amount END), 0) AS credits,
 	COALESCE(SUM(CASE WHEN t.status = 'pending' AND e.direction = 'debit'  THEN e.amount END), 0) AS pending_debits,
 	COALESCE(SUM(CASE WHEN t.status = 'pending' AND e.direction = 'credit' THEN e.amount END), 0) AS pending_credits
 	FROM entries e
 	JOIN transactions t ON t.id = e.transaction_id
-	WHERE t.status IN ('posted', 'pending')
+	WHERE t.status IN ('posted', 'reversed', 'pending')
 	GROUP BY e.account_id
 `
 

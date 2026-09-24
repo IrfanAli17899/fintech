@@ -46,10 +46,13 @@ type accountResponse struct {
 }
 
 type balanceResponse struct {
-	AccountID uuid.UUID `json:"account_id"`
-	Currency  string    `json:"currency"`
-	Amount    int64     `json:"amount"`
-	AsOf      time.Time `json:"as_of"`
+	AccountID  uuid.UUID `json:"account_id"`
+	Currency   string    `json:"currency"`
+	Posted     int64     `json:"posted"`
+	PendingIn  int64     `json:"pending_in"`
+	PendingOut int64     `json:"pending_out"`
+	Available  int64     `json:"available"`
+	AsOf       time.Time `json:"as_of"`
 }
 
 func toAccountResponse(a *domain.Account) *accountResponse {
@@ -79,9 +82,12 @@ func toBalanceResponse(b *domain.Balance) *balanceResponse {
 		return nil
 	}
 	return &balanceResponse{
-		AccountID: b.AccountID,
-		Currency:  b.Currency,
-		Amount:    b.Amount,
-		AsOf:      b.AsOf,
+		AccountID:  b.AccountID,
+		Currency:   b.Currency,
+		Posted:     b.Posted,
+		PendingIn:  b.PendingIn,
+		PendingOut: b.PendingOut,
+		Available:  b.Available,
+		AsOf:       b.AsOf,
 	}
 }

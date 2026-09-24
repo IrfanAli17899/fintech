@@ -201,20 +201,18 @@ func (t Transaction) Reverse(amount int64, reversed map[uuid.UUID]int64) []Entry
 	out := make([]Entry, 0, len(t.Entries))
 	for _, e := range t.Entries {
 		remaining := e.Amount - reversed[e.AccountID]
-		scaled := remaining * amount / remainingTotal
-		if scaled == 0 {
-			continue
-		}
 		dir := EntryDirectionDebit
 		if e.Direction == EntryDirectionDebit {
 			dir = EntryDirectionCredit
 		}
-		out = append(out, Entry{AccountID: e.AccountID, Amount: scaled, Direction: dir})
+		out = append(out, Entry{AccountID: e.AccountID, Amount: remaining * amount / remainingTotal, Direction: dir})
 	}
 
 	fixShortfall(out, EntryDirectionDebit, amount)
 	fixShortfall(out, EntryDirectionCredit, amount)
-	return out
+
+	// drop legs that carry none of this reversal
+	return slices.DeleteFunc(out, func(e Entry) bool { return e.Amount == 0 })
 }
 
 // fixShortfall adds any rounding gap on one side to that side's largest entry. // remainder
