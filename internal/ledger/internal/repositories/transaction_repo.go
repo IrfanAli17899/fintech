@@ -23,9 +23,9 @@ func (r *TransactionRepo) WithTx(tx *sql.Tx) *TransactionRepo { return &Transact
 
 func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
 	err := r.db.QueryRowContext(ctx,
-		`INSERT INTO transactions (kind, status, reverses_id, posted_at) 
+		`INSERT INTO transactions (kind, status, parent_id, posted_at) 
 		VALUES ($1, $2, $3, CASE WHEN $2::transaction_status = 'posted' THEN now() END) RETURNING id, status, created_at, posted_at`,
-		t.Kind, t.Status, t.ReversesID,
+		t.Kind, t.Status, t.ParentID,
 	).Scan(&t.ID, &t.Status, &t.CreatedAt, &t.PostedAt)
 
 	if err != nil {
@@ -47,12 +47,12 @@ func (r *TransactionRepo) LockByID(ctx context.Context, id uuid.UUID) (*domain.T
 func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*domain.Transaction, error) {
 	var t domain.Transaction
 
-	query := `SELECT id, kind, status, reverses_id, created_at, posted_at from transactions where id=$1`
+	query := `SELECT id, kind, status, parent_id, created_at, posted_at from transactions where id=$1`
 	if lock {
 		query += ` FOR UPDATE`
 	}
 
-	err := r.db.QueryRowContext(ctx, query, id).Scan(&t.ID, &t.Kind, &t.Status, &t.ReversesID, &t.CreatedAt, &t.PostedAt)
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&t.ID, &t.Kind, &t.Status, &t.ParentID, &t.CreatedAt, &t.PostedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrTransactionNotFound(id)
@@ -66,12 +66,12 @@ func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*do
 
 // ReversedByAccount returns, for each account, how much has already been
 // reversed against original (taken from the reversals' entries).
-func (r *TransactionRepo) ReversedByAccount(ctx context.Context, originalID uuid.UUID) (map[uuid.UUID]int64, error) {
+func (r *TransactionRepo) ReversedAmountsByAccount(ctx context.Context, originalID uuid.UUID) (map[uuid.UUID]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.account_id, SUM(e.amount)
 		FROM transactions t
 		JOIN entries e ON e.transaction_id = t.id
-		WHERE t.reverses_id = $1 AND t.status = 'posted'
+		WHERE t.parent_id = $1 AND t.status = 'posted' AND t.kind = 'refund'
 		GROUP BY e.account_id`, originalID)
 	if err != nil {
 		return nil, errdefs.Internalf(err, "reversed by account")
@@ -91,16 +91,4 @@ func (r *TransactionRepo) ReversedByAccount(ctx context.Context, originalID uuid
 		return nil, errdefs.Internalf(err, "reversed by account rows")
 	}
 	return out, nil
-}
-
-func (r *TransactionRepo) MarkReversed(ctx context.Context, id uuid.UUID) error {
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE transactions SET status = 'reversed' WHERE id = $1 AND status = 'posted'`, id)
-	if err != nil {
-		return errdefs.Internalf(err, "mark reversed")
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return errdefs.Internalf(nil, "transaction %s not posted when marking reversed", id)
-	}
-	return nil
 }

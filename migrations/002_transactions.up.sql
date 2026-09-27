@@ -1,15 +1,18 @@
 CREATE TYPE transaction_kind AS ENUM ('topup','transfer','payment','refund','fee');
-CREATE TYPE transaction_status AS ENUM ('pending','posted','voided','reversed');
+CREATE TYPE transaction_status AS ENUM ('pending','posted','voided');
 CREATE TYPE entry_direction AS ENUM ('debit','credit');
 
 CREATE TABLE transactions (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   kind            transaction_kind NOT NULL,
   status          transaction_status NOT NULL DEFAULT 'posted',
-  reverses_id     UUID REFERENCES transactions(id),
+  parent_id     UUID REFERENCES transactions(id),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  posted_at       TIMESTAMPTZ
+  posted_at       TIMESTAMPTZ,
+
+  CHECK (kind <> 'refund' OR parent_id IS NOT NULL)
 );
+CREATE INDEX transactions_parent_id_idx ON transactions(parent_id) WHERE parent_id IS NOT NULL;
 
 CREATE TABLE entries (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),

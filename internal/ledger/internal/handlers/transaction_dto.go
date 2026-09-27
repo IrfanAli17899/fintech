@@ -47,13 +47,13 @@ type entryResponse struct {
 }
 
 type transactionResponse struct {
-	ID         uuid.UUID       `json:"id"`
-	Kind       string          `json:"kind"`
-	Status     string          `json:"status"`
-	ReversesID *uuid.UUID      `json:"reverses_id,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	PostedAt   *time.Time      `json:"posted_at,omitempty"`
-	Entries    []entryResponse `json:"entries"`
+	ID        uuid.UUID       `json:"id"`
+	Kind      string          `json:"kind"`
+	Status    string          `json:"status"`
+	ParentID  *uuid.UUID      `json:"parent_id,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	PostedAt  *time.Time      `json:"posted_at,omitempty"`
+	Entries   []entryResponse `json:"entries"`
 }
 
 type reverseTransactionRequest struct {
@@ -84,12 +84,12 @@ func toTransactionResponse(t *domain.Transaction) *transactionResponse {
 		}
 	}
 	return &transactionResponse{
-		ID:         t.ID,
-		Kind:       string(t.Kind),
-		Status:     string(t.Status),
-		ReversesID: t.ReversesID,
-		CreatedAt:  t.CreatedAt,
-		PostedAt:   t.PostedAt,
-		Entries:    entries,
+		ID:        t.ID,
+		Kind:      string(t.Kind),
+		Status:    string(t.Status),
+		ParentID:  t.ParentID,
+		CreatedAt: t.CreatedAt,
+		PostedAt:  t.PostedAt,
+		Entries:   entries,
 	}
 }

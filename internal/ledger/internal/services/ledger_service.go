@@ -122,7 +122,7 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 			return err
 		}
 
-		reversedBy, err := r.txns.ReversedByAccount(ctx, original.ID)
+		reversedBy, err := r.txns.ReversedAmountsByAccount(ctx, original.ID)
 		if err != nil {
 			return err
 		}
@@ -143,9 +143,9 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 
 		t := domain.Transaction{
 			Kind:           domain.TransactionKindRefund,
-			Status:         domain.TransactionStatusPosted, // ← add this
+			Status:         domain.TransactionStatusPosted,
 			IdempotencyKey: cmd.IdempotencyKey,
-			ReversesID:     &original.ID,
+			ParentID:       &original.ID,
 			Entries:        original.Reverse(amount, reversedBy),
 		}
 		if err := t.Validate(); err != nil {
@@ -157,11 +157,6 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 			return err
 		}
 
-		if reversed+amount == total {
-			if err := r.txns.MarkReversed(ctx, original.ID); err != nil {
-				return err
-			}
-		}
 		return r.keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
 	})
 	if err != nil {

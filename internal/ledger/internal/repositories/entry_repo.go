@@ -86,21 +86,3 @@ func (r *EntryRepo) ListByTransaction(ctx context.Context, txID uuid.UUID) ([]do
 
 	return out, nil
 }
-
-func (r *EntryRepo) SumByAccount(ctx context.Context, accId uuid.UUID) (debits, credits int64, err error) {
-	err = r.db.QueryRowContext(ctx,
-		`SELECT
-  		COALESCE(SUM(CASE WHEN e.direction = 'debit'  THEN e.amount ELSE 0 END), 0) AS debits,
-  		COALESCE(SUM(CASE WHEN e.direction = 'credit' THEN e.amount ELSE 0 END), 0) AS credits
-		FROM entries e
-		JOIN transactions t ON t.id = e.transaction_id
-		WHERE e.account_id = $1 AND t.status = 'posted'`,
-		accId).Scan(&debits, &credits)
-
-	if err != nil {
-		return 0, 0, errdefs.Internalf(err, "sum entries for account")
-	}
-
-	return debits, credits, nil
-
-}

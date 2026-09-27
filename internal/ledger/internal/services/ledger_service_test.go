@@ -348,7 +348,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 
 	r1, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: pay.ID, Amount: 50, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	if r1.ReversesID == nil || *r1.ReversesID != pay.ID {
+	if r1.ParentID == nil || *r1.ParentID != pay.ID {
 		t.Fatal("reversal not linked to original")
 	}
 	if b := f.balance(t, shop); b.Posted != 115-48 {
@@ -360,8 +360,8 @@ func TestReverse_PartialThenRest(t *testing.T) {
 
 	orig, err := f.ledger.GetTransaction(f.ctx, pay.ID)
 	must(t, err)
-	if orig.Status != domain.TransactionStatusReversed {
-		t.Fatalf("original status = %s, want reversed", orig.Status)
+	if orig.Status != domain.TransactionStatusPosted {
+		t.Fatalf("original status = %s, want posted (reversal never mutates the original)", orig.Status)
 	}
 	if b := f.balance(t, ali); b.Posted != 120 {
 		t.Fatalf("ali should be whole again, got %d", b.Posted)
@@ -371,8 +371,8 @@ func TestReverse_PartialThenRest(t *testing.T) {
 	}
 
 	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: pay.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
-	if !errdefs.Is(err, domain.CodeTransactionNotReversible) {
-		t.Fatalf("want TRANSACTION_NOT_REVERSIBLE, got %v", err)
+	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
+		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
 	f.verifyClean(t)
 }

@@ -21,10 +21,9 @@ const (
 	TransactionKindRefund   TransactionKind = "refund"
 	TransactionKindFee      TransactionKind = "fee"
 
-	TransactionStatusPending  TransactionStatus = "pending"
-	TransactionStatusPosted   TransactionStatus = "posted"
-	TransactionStatusVoided   TransactionStatus = "voided"
-	TransactionStatusReversed TransactionStatus = "reversed"
+	TransactionStatusPending TransactionStatus = "pending"
+	TransactionStatusPosted  TransactionStatus = "posted"
+	TransactionStatusVoided  TransactionStatus = "voided"
 
 	EntryDirectionDebit  EntryDirection = "debit"
 	EntryDirectionCredit EntryDirection = "credit"
@@ -36,7 +35,7 @@ var validTransactionKinds = map[TransactionKind]bool{
 }
 
 var validTransactionStatus = map[TransactionStatus]bool{
-	TransactionStatusPending: true, TransactionStatusPosted: true, TransactionStatusReversed: true,
+	TransactionStatusPending: true, TransactionStatusPosted: true,
 	TransactionStatusVoided: true,
 }
 
@@ -55,7 +54,7 @@ type Transaction struct {
 	ID             uuid.UUID
 	IdempotencyKey string
 	Kind           TransactionKind
-	ReversesID     *uuid.UUID
+	ParentID       *uuid.UUID
 	Status         TransactionStatus
 	CreatedAt      time.Time
 	PostedAt       *time.Time

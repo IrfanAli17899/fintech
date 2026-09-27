@@ -1,3 +1,4 @@
+DROP INDEX IF EXISTS transactions_parent_id_idx;
 DROP TABLE IF EXISTS entries;
 DROP TABLE IF EXISTS transactions;
 DROP TYPE IF EXISTS entry_direction;
