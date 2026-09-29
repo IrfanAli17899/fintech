@@ -30,6 +30,8 @@ var (
 	CodeTransactionNotReversible = "TRANSACTION_NOT_REVERSIBLE"
 	CodeReversalExceedsOriginal  = "REVERSAL_EXCEEDS_ORIGINAL"
 	CodeInvalidTransactionStatus = "INVALID_TRANSACTION_STATUS"
+	CodeTransactionNotPending    = "TRANSACTION_NOT_PENDING"
+	CodeCaptureExceedsHold       = "CAPTURE_EXCEEDS_HOLD"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -129,6 +131,16 @@ func ErrReversalExceedsOriginal(id uuid.UUID, remaining, requested int64) *errde
 func ErrInvalidTransactionStatus(s TransactionStatus) *errdefs.Error {
 	return errdefs.Validationf(CodeInvalidTransactionStatus,
 		"transaction status %q is not valid for posting; use pending or posted", s)
+}
+
+func ErrTransactionNotPending(id uuid.UUID, status TransactionStatus) *errdefs.Error {
+	return errdefs.Validationf(CodeTransactionNotPending,
+		"transaction %s is %s; only pending transactions can be captured or voided", id, status)
+}
+
+func ErrCaptureExceedsHold(id uuid.UUID, held, requested int64) *errdefs.Error {
+	return errdefs.Validationf(CodeCaptureExceedsHold,
+		"hold %s is for %d, capture of %d requested", id, held, requested)
 }
 
 // Internal signal from the repo that the key already exists; the service

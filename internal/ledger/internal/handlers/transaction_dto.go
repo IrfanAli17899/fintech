@@ -93,3 +93,20 @@ func toTransactionResponse(t *domain.Transaction) *transactionResponse {
 		Entries:   entries,
 	}
 }
+
+type captureTransactionRequest struct {
+	IdempotencyKey string `json:"idempotency_key"`
+	Amount         int64  `json:"amount,omitempty"` // 0 or omitted = everything still held
+}
+
+func (r captureTransactionRequest) toCommand(holdID uuid.UUID) services.CaptureCommand {
+	return services.CaptureCommand{HoldID: holdID, Amount: r.Amount, IdempotencyKey: r.IdempotencyKey}
+}
+
+type voidTransactionRequest struct {
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+func (r voidTransactionRequest) toCommand(holdID uuid.UUID) services.VoidCommand {
+	return services.VoidCommand{HoldID: holdID, IdempotencyKey: r.IdempotencyKey}
+}

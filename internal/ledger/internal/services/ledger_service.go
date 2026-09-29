@@ -11,6 +11,23 @@ import (
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 
+type CaptureCommand struct {
+	HoldID         uuid.UUID
+	Amount         int64 // 0 = full
+	IdempotencyKey string
+}
+type VoidCommand struct {
+	HoldID         uuid.UUID
+	IdempotencyKey string
+}
+
+// ReverseCommand asks for a full (Amount == 0) or partial reversal of a posted transaction.
+type ReverseCommand struct {
+	OriginalID     uuid.UUID
+	Amount         int64
+	IdempotencyKey string
+}
+
 type LedgerService struct {
 	txRunner        database.TxRunner
 	accRepo         *repositories.AccountRepo
@@ -80,13 +97,6 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 	return created, replayed, nil
 }
 
-// ReverseCommand asks for a full (Amount == 0) or partial reversal of a posted transaction.
-type ReverseCommand struct {
-	OriginalID     uuid.UUID
-	Amount         int64
-	IdempotencyKey string
-}
-
 // Reverse posts a refund transaction that undoes all or part of the original.
 // The original is locked for the duration so concurrent partial reversals
 // cannot together exceed its total.
@@ -122,7 +132,7 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 			return err
 		}
 
-		reversedBy, err := r.txns.ReversedAmountsByAccount(ctx, original.ID)
+		reversedBy, err := r.txns.ChildAmountsByAccount(ctx, original.ID, domain.TransactionKindRefund)
 		if err != nil {
 			return err
 		}
@@ -167,6 +177,136 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 
 func (s *LedgerService) GetTransaction(ctx context.Context, id uuid.UUID) (*domain.Transaction, error) {
 	return s.loadTransaction(ctx, s.transactionRepo, s.entryRepo, id)
+}
+
+func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domain.Transaction, bool, error) {
+	var (
+		created  *domain.Transaction
+		replayed bool
+	)
+	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+		r := s.repos(tx)
+
+		hash := domain.HashOf("capture", cmd.HoldID.String(), strconv.FormatInt(cmd.Amount, 10))
+		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
+		if err != nil {
+			return err
+		}
+		if rp != nil {
+			created, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			replayed = true
+			return err
+		}
+
+		h, err := s.lockPending(ctx, r, cmd.HoldID)
+		if err != nil {
+			return err
+		}
+		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, h.Kind)
+		if err != nil {
+			return err
+		}
+		var captured int64
+		for _, e := range h.Entries {
+			if e.Direction == domain.EntryDirectionDebit {
+				captured += capturedBy[e.AccountID]
+			}
+		}
+		held := h.Total()
+		remaining := held - captured
+		amount := cmd.Amount
+		if amount == 0 {
+			amount = remaining
+		}
+		if amount <= 0 || amount > remaining {
+			return domain.ErrCaptureExceedsHold(h.ID, remaining, amount)
+		}
+
+		child := domain.Transaction{
+			Kind:           h.Kind,
+			Status:         domain.TransactionStatusPosted,
+			IdempotencyKey: cmd.IdempotencyKey,
+			ParentID:       &h.ID,
+			Entries:        h.Scaled(amount, capturedBy),
+		}
+		if err := child.Validate(); err != nil {
+			return err
+		}
+
+		// release exactly this capture's share of the reservation before posting,
+		// so the funds check sees the right available
+		if err := s.releaseReservation(ctx, r, pendingSums(child)); err != nil {
+			return err
+		}
+		created, err = s.post(ctx, r, child)
+		if err != nil {
+			return err
+		}
+		if captured+amount == held {
+			if err := r.txns.MarkVoided(ctx, h.ID); err != nil {
+				return err
+			}
+		}
+		return r.keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return created, replayed, nil
+}
+
+// Void releases whatever a hold still reserves and marks it voided. Captures
+// already posted against it are untouched.
+func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Transaction, bool, error) {
+	var (
+		voided   *domain.Transaction
+		replayed bool
+	)
+	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+		r := s.repos(tx)
+
+		hash := domain.HashOf("void", cmd.HoldID.String())
+		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
+		if err != nil {
+			return err
+		}
+		if rp != nil {
+			voided, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			replayed = true
+			return err
+		}
+
+		h, err := s.lockPending(ctx, r, cmd.HoldID)
+		if err != nil {
+			return err
+		}
+		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, h.Kind)
+		if err != nil {
+			return err
+		}
+		var captured int64
+		for _, e := range h.Entries {
+			if e.Direction == domain.EntryDirectionDebit {
+				captured += capturedBy[e.AccountID]
+			}
+		}
+		if remaining := h.Total() - captured; remaining > 0 {
+			rest := domain.Transaction{Entries: h.Scaled(remaining, capturedBy)}
+			if err := s.releaseReservation(ctx, r, pendingSums(rest)); err != nil {
+				return err
+			}
+		}
+		if err := r.txns.MarkVoided(ctx, h.ID); err != nil {
+			return err
+		}
+		h.Status = domain.TransactionStatusVoided
+		voided = h
+		return r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return voided, replayed, nil
 }
 
 // ---- posting pipeline ----
@@ -278,4 +418,43 @@ func (s *LedgerService) loadTransaction(ctx context.Context, txns *repositories.
 	}
 	t.Entries, err = ents.ListByTransaction(ctx, id)
 	return t, err
+}
+
+func (s *LedgerService) releaseReservation(ctx context.Context, r txRepos, sums map[uuid.UUID]domain.AccountSums) error {
+	ids := make([]uuid.UUID, 0, len(sums))
+	for id := range sums {
+		ids = append(ids, id)
+	}
+	domain.SortIDs(ids)
+	if _, err := r.balances.LockAndGet(ctx, ids); err != nil {
+		return err
+	}
+	for id, s := range sums {
+		if err := r.balances.ReleasePending(ctx, id, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *LedgerService) lockPending(ctx context.Context, r txRepos, id uuid.UUID) (*domain.Transaction, error) {
+	h, err := r.txns.LockByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if h.Status != domain.TransactionStatusPending {
+		return nil, domain.ErrTransactionNotPending(h.ID, h.Status)
+	}
+	h.Entries, err = r.entries.ListByTransaction(ctx, h.ID)
+	if err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+// pendingSums returns t's per-account sums as if t were pending, i.e. the
+// reservation those entries represent.
+func pendingSums(t domain.Transaction) map[uuid.UUID]domain.AccountSums {
+	t.Status = domain.TransactionStatusPending
+	return t.SumsByAccount()
 }

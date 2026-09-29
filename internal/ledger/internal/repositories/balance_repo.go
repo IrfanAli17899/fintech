@@ -65,14 +65,21 @@ func (r *BalanceRepo) Apply(ctx context.Context, accountID uuid.UUID, s domain.A
 // its a product status for posted refunds without subquery
 
 const liveBalancesCTE = `
-	SELECT 
+	SELECT
 		e.account_id,
 		COALESCE(SUM(CASE WHEN t.status = 'posted' AND e.direction = 'debit'  THEN e.amount END), 0) AS debits,
 		COALESCE(SUM(CASE WHEN t.status = 'posted' AND e.direction = 'credit' THEN e.amount END), 0) AS credits,
-		COALESCE(SUM(CASE WHEN t.status = 'pending' AND e.direction = 'debit'  THEN e.amount END), 0) AS pending_debits,
-		COALESCE(SUM(CASE WHEN t.status = 'pending' AND e.direction = 'credit' THEN e.amount END), 0) AS pending_credits
+		COALESCE(SUM(CASE
+			WHEN t.status = 'pending' AND e.direction = 'debit' THEN e.amount
+			WHEN t.status = 'posted' AND p.status = 'pending' AND e.direction = 'debit' THEN -e.amount
+		END), 0) AS pending_debits,
+		COALESCE(SUM(CASE
+			WHEN t.status = 'pending' AND e.direction = 'credit' THEN e.amount
+			WHEN t.status = 'posted' AND p.status = 'pending' AND e.direction = 'credit' THEN -e.amount
+		END), 0) AS pending_credits
 	FROM entries e
 	JOIN transactions t ON t.id = e.transaction_id
+	LEFT JOIN transactions p ON p.id = t.parent_id
 	WHERE t.status IN ('posted', 'pending')
 	GROUP BY e.account_id
 `
@@ -161,4 +168,17 @@ func (r *BalanceRepo) LockAndGet(ctx context.Context, ids []uuid.UUID) (map[uuid
 		return nil, errdefs.Internalf(err, "lock balances rows")
 	}
 	return out, nil
+}
+
+func (r *BalanceRepo) ReleasePending(ctx context.Context, accountID uuid.UUID, s domain.AccountSums) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE balances SET
+			pending_debits  = pending_debits  - $2,
+			pending_credits = pending_credits - $3,
+			updated_at      = now()
+		WHERE account_id = $1`, accountID, s.PendingDebits, s.PendingCredits)
+	if err != nil {
+		return errdefs.Internalf(err, "release pending")
+	}
+	return nil
 }

@@ -19,6 +19,8 @@ func (h *TransactionHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /transactions/{id}", h.GetTransaction)
 	mux.HandleFunc("POST /transactions", h.CreateTransaction)
 	mux.HandleFunc("POST /transactions/{id}/reverse", h.ReverseTransaction)
+	mux.HandleFunc("POST /transactions/{id}/capture", h.CaptureTransaction)
+	mux.HandleFunc("POST /transactions/{id}/void", h.VoidTransaction)
 }
 
 func (h *TransactionHandler) GetTransaction(w http.ResponseWriter, r *http.Request) {
@@ -64,4 +66,38 @@ func (h *TransactionHandler) ReverseTransaction(w http.ResponseWriter, r *http.R
 		return
 	}
 	httpx.Created(w, toTransactionResponse(t), err)
+}
+
+func (h *TransactionHandler) CaptureTransaction(w http.ResponseWriter, r *http.Request) {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	req, err := httpx.Decode[captureTransactionRequest](r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	t, replayed, err := h.ledgerSvc.Capture(r.Context(), req.toCommand(id))
+	if replayed {
+		httpx.OK(w, toTransactionResponse(t), err)
+		return
+	}
+	httpx.Created(w, toTransactionResponse(t), err)
+}
+
+func (h *TransactionHandler) VoidTransaction(w http.ResponseWriter, r *http.Request) {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	req, err := httpx.Decode[voidTransactionRequest](r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	t, _, err := h.ledgerSvc.Void(r.Context(), req.toCommand(id))
+	httpx.OK(w, toTransactionResponse(t), err)
 }

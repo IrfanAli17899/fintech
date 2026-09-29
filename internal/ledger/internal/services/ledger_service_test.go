@@ -555,3 +555,246 @@ func TestPost_ConcurrentCreditsToOneMerchant(t *testing.T) {
 	}
 	f.verifyClean(t)
 }
+
+// ---- story 13: capture and void ----
+
+func TestCapture_Full(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	cap, replayed, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if replayed || cap.Status != domain.TransactionStatusPosted || cap.ParentID == nil || *cap.ParentID != h.ID {
+		t.Fatalf("capture: %+v", cap)
+	}
+	if cap.Kind != h.Kind {
+		t.Fatalf("capture kind = %s, want %s", cap.Kind, h.Kind)
+	}
+	holdNow, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if holdNow.Status != domain.TransactionStatusVoided {
+		t.Fatalf("hold status = %s, want voided", holdNow.Status)
+	}
+	a := f.balance(t, ali)
+	if a.Posted != 500 || a.PendingOut != 0 || a.Available != 500 {
+		t.Fatalf("ali: %+v", a)
+	}
+	s := f.balance(t, shop)
+	if s.Posted != 500 || s.PendingIn != 0 {
+		t.Fatalf("shop: %+v", s)
+	}
+	f.verifyClean(t)
+}
+
+func TestCapture_PartialKeepsRestReserved(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	cap, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if cap.Total() != 300 {
+		t.Fatalf("capture total = %d, want 300", cap.Total())
+	}
+
+	a := f.balance(t, ali)
+	if a.Posted != 700 || a.PendingOut != 200 || a.Available != 500 {
+		t.Fatalf("ali: only the captured portion should be released: %+v", a)
+	}
+	if s := f.balance(t, shop); s.Posted != 300 || s.PendingIn != 200 {
+		t.Fatalf("shop: %+v", s)
+	}
+
+	holdNow, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if holdNow.Status != domain.TransactionStatusPending {
+		t.Fatalf("hold should stay pending after partial capture, got %s", holdNow.Status)
+	}
+	f.verifyClean(t)
+}
+
+func TestCapture_ExceedsHold(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 501, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeCaptureExceedsHold) {
+		t.Fatalf("want CAPTURE_EXCEEDS_HOLD, got %v", err)
+	}
+	if b := f.balance(t, ali); b.PendingOut != 500 {
+		t.Fatalf("hold disturbed by rejected capture: %+v", b)
+	}
+}
+
+func TestCapture_NotPending(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	posted := f.post(t, transfer(ali, shop, 100, uuid.NewString()))
+
+	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
+		t.Fatalf("capture posted: want TRANSACTION_NOT_PENDING, got %v", err)
+	}
+	_, _, err = f.ledger.Void(f.ctx, services.VoidCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
+		t.Fatalf("void posted: want TRANSACTION_NOT_PENDING, got %v", err)
+	}
+}
+
+func TestVoid_ReleasesHold(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	v, _, err := f.ledger.Void(f.ctx, services.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if v.ID != h.ID || v.Status != domain.TransactionStatusVoided {
+		t.Fatalf("void: %+v", v)
+	}
+	a := f.balance(t, ali)
+	if a.Posted != 1000 || a.PendingOut != 0 || a.Available != 1000 {
+		t.Fatalf("ali after void: %+v", a)
+	}
+	if s := f.balance(t, shop); s.Posted != 0 || s.PendingIn != 0 {
+		t.Fatalf("shop after void: %+v", s)
+	}
+	// capturing a voided hold is rejected
+	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
+		t.Fatalf("want TRANSACTION_NOT_PENDING, got %v", err)
+	}
+	f.verifyClean(t)
+}
+
+func TestCapture_ReplayReturnsCapture(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+	key := uuid.NewString()
+
+	first, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
+	must(t, err)
+	second, replayed, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
+	must(t, err)
+	if !replayed || second.ID != first.ID {
+		t.Fatalf("replay=%v same=%v", replayed, second.ID == first.ID)
+	}
+	if b := f.balance(t, shop); b.Posted != 300 {
+		t.Fatalf("replay double-captured: %d", b.Posted)
+	}
+}
+
+func TestCapture_ConcurrentCapturesOnlyOneWins(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		ok, bad int
+	)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				ok++
+			case errdefs.Is(err, domain.CodeTransactionNotPending):
+				bad++
+			default:
+				t.Errorf("unexpected: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok != 1 || bad != 4 {
+		t.Fatalf("want 1 capture / 4 rejected, got %d / %d", ok, bad)
+	}
+	if b := f.balance(t, shop); b.Posted != 500 {
+		t.Fatalf("shop posted = %d, want 500", b.Posted)
+	}
+	f.verifyClean(t)
+}
+
+func TestCapture_TwiceThenExhausted(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()}) // the rest
+	must(t, err)
+
+	holdNow, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if holdNow.Status != domain.TransactionStatusVoided {
+		t.Fatalf("fully captured hold should be voided, got %s", holdNow.Status)
+	}
+	a := f.balance(t, ali)
+	if a.Posted != 500 || a.PendingOut != 0 || a.Available != 500 {
+		t.Fatalf("ali: %+v", a)
+	}
+	if s := f.balance(t, shop); s.Posted != 500 || s.PendingIn != 0 {
+		t.Fatalf("shop: %+v", s)
+	}
+	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
+		t.Fatalf("want TRANSACTION_NOT_PENDING, got %v", err)
+	}
+	f.verifyClean(t)
+}
+
+func TestVoid_AfterPartialReleasesRest(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	_, _, err = f.ledger.Void(f.ctx, services.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+
+	a := f.balance(t, ali)
+	if a.Posted != 700 || a.PendingOut != 0 || a.Available != 700 {
+		t.Fatalf("ali: captured 300 stays, rest released: %+v", a)
+	}
+	if s := f.balance(t, shop); s.Posted != 300 || s.PendingIn != 0 {
+		t.Fatalf("shop: %+v", s)
+	}
+	f.verifyClean(t)
+}

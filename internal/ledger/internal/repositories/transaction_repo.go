@@ -64,17 +64,17 @@ func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*do
 	return &t, nil
 }
 
-// ReversedByAccount returns, for each account, how much has already been
-// reversed against original (taken from the reversals' entries).
-func (r *TransactionRepo) ReversedAmountsByAccount(ctx context.Context, originalID uuid.UUID) (map[uuid.UUID]int64, error) {
+// ChildAmountsByAccount sums, per account, the posted children of parent that
+// have the given kind: refunds against a payment, or captures against a hold.
+func (r *TransactionRepo) ChildAmountsByAccount(ctx context.Context, parentID uuid.UUID, kind domain.TransactionKind) (map[uuid.UUID]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.account_id, SUM(e.amount)
 		FROM transactions t
 		JOIN entries e ON e.transaction_id = t.id
-		WHERE t.parent_id = $1 AND t.status = 'posted' AND t.kind = 'refund'
-		GROUP BY e.account_id`, originalID)
+		WHERE t.parent_id = $1 AND t.kind = $2 AND t.status = 'posted'
+		GROUP BY e.account_id`, parentID, kind)
 	if err != nil {
-		return nil, errdefs.Internalf(err, "reversed by account")
+		return nil, errdefs.Internalf(err, "child amounts by account")
 	}
 	defer rows.Close()
 
@@ -83,12 +83,24 @@ func (r *TransactionRepo) ReversedAmountsByAccount(ctx context.Context, original
 		var id uuid.UUID
 		var sum int64
 		if err := rows.Scan(&id, &sum); err != nil {
-			return nil, errdefs.Internalf(err, "scan reversed by account")
+			return nil, errdefs.Internalf(err, "scan child amounts")
 		}
 		out[id] = sum
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errdefs.Internalf(err, "reversed by account rows")
+		return nil, errdefs.Internalf(err, "child amounts rows")
 	}
 	return out, nil
+}
+
+func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE transactions SET status = 'voided' WHERE id = $1 AND status = 'pending'`, id)
+	if err != nil {
+		return errdefs.Internalf(err, "mark voided")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errdefs.Internalf(nil, "transaction %s not pending when voiding", id)
+	}
+	return nil
 }

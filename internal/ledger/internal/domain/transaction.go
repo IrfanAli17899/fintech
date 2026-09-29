@@ -70,14 +70,16 @@ type Entry struct {
 	CreatedAt     time.Time
 }
 
+func SortIDs(ids []uuid.UUID) {
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+}
+
 func (t Transaction) AccountIDs() []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(t.Entries))
 	for _, e := range t.Entries {
 		ids = append(ids, e.AccountID)
 	}
-	slices.SortFunc(ids, func(a, b uuid.UUID) int {
-		return bytes.Compare(a[:], b[:])
-	})
+	SortIDs(ids)
 	return slices.Compact(ids)
 }
 
@@ -185,33 +187,41 @@ func (t Transaction) Total() int64 {
 	return total
 }
 
+// Scaled returns copies of t's legs scaled to amount against what remains of
+// each leg after prior children (already maps account → amount consumed).
+// Same direction as the original; rounding shortfall goes to the largest leg
+// on each side; zero legs are dropped.
+func (t Transaction) Scaled(amount int64, already map[uuid.UUID]int64) []Entry {
+	var remainingTotal int64
+	for _, e := range t.Entries {
+		if e.Direction == EntryDirectionDebit {
+			remainingTotal += e.Amount - already[e.AccountID]
+		}
+	}
+	out := make([]Entry, 0, len(t.Entries))
+	for _, e := range t.Entries {
+		remaining := e.Amount - already[e.AccountID]
+		out = append(out, Entry{AccountID: e.AccountID, Amount: remaining * amount / remainingTotal, Direction: e.Direction})
+	}
+	fixShortfall(out, EntryDirectionDebit, amount)
+	fixShortfall(out, EntryDirectionCredit, amount)
+	return slices.DeleteFunc(out, func(e Entry) bool { return e.Amount == 0 })
+}
+
 // Reverse returns entries that undo amount of what remains of t after prior
 // reversals (reversed maps account → amount already reversed on that leg).
 // Every direction is flipped and each remaining leg is scaled proportionally;
 // when amount equals the remaining total every leg reverses exactly, with no rounding.
 func (t Transaction) Reverse(amount int64, reversed map[uuid.UUID]int64) []Entry {
-	var remainingTotal int64
-	for _, e := range t.Entries {
-		if e.Direction == EntryDirectionDebit {
-			remainingTotal += e.Amount - reversed[e.AccountID]
+	out := t.Scaled(amount, reversed)
+	for i := range out {
+		if out[i].Direction == EntryDirectionDebit {
+			out[i].Direction = EntryDirectionCredit
+		} else {
+			out[i].Direction = EntryDirectionDebit
 		}
 	}
-
-	out := make([]Entry, 0, len(t.Entries))
-	for _, e := range t.Entries {
-		remaining := e.Amount - reversed[e.AccountID]
-		dir := EntryDirectionDebit
-		if e.Direction == EntryDirectionDebit {
-			dir = EntryDirectionCredit
-		}
-		out = append(out, Entry{AccountID: e.AccountID, Amount: remaining * amount / remainingTotal, Direction: dir})
-	}
-
-	fixShortfall(out, EntryDirectionDebit, amount)
-	fixShortfall(out, EntryDirectionCredit, amount)
-
-	// drop legs that carry none of this reversal
-	return slices.DeleteFunc(out, func(e Entry) bool { return e.Amount == 0 })
+	return out
 }
 
 // fixShortfall adds any rounding gap on one side to that side's largest entry. // remainder
