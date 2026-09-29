@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
@@ -23,10 +24,11 @@ func (r *TransactionRepo) WithTx(tx *sql.Tx) *TransactionRepo { return &Transact
 
 func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
 	err := r.db.QueryRowContext(ctx,
-		`INSERT INTO transactions (kind, status, parent_id, posted_at) 
-		VALUES ($1, $2, $3, CASE WHEN $2::transaction_status = 'posted' THEN now() END) RETURNING id, status, created_at, posted_at`,
-		t.Kind, t.Status, t.ParentID,
-	).Scan(&t.ID, &t.Status, &t.CreatedAt, &t.PostedAt)
+		`INSERT INTO transactions (kind, status, parent_id, expires_at, posted_at) 
+		VALUES ($1, $2, $3, $4, CASE WHEN $2::transaction_status = 'posted' THEN now() END) 
+		RETURNING id, status, created_at, expires_at, posted_at`,
+		t.Kind, t.Status, t.ParentID, t.ExpiresAt,
+	).Scan(&t.ID, &t.Status, &t.CreatedAt, &t.ExpiresAt, &t.PostedAt)
 
 	if err != nil {
 		return nil, errdefs.Internalf(err, "create transaction")
@@ -47,12 +49,12 @@ func (r *TransactionRepo) LockByID(ctx context.Context, id uuid.UUID) (*domain.T
 func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*domain.Transaction, error) {
 	var t domain.Transaction
 
-	query := `SELECT id, kind, status, parent_id, created_at, posted_at from transactions where id=$1`
+	query := `SELECT id, kind, status, parent_id, created_at, expires_at, posted_at from transactions where id=$1`
 	if lock {
 		query += ` FOR UPDATE`
 	}
 
-	err := r.db.QueryRowContext(ctx, query, id).Scan(&t.ID, &t.Kind, &t.Status, &t.ParentID, &t.CreatedAt, &t.PostedAt)
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&t.ID, &t.Kind, &t.Status, &t.ParentID, &t.CreatedAt, &t.ExpiresAt, &t.PostedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrTransactionNotFound(id)
@@ -103,4 +105,33 @@ func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID) error {
 		return errdefs.Internalf(nil, "transaction %s not pending when voiding", id)
 	}
 	return nil
+}
+
+// ExpiredHolds returns ids of pending transactions whose expiry has passed, at most
+// limit, skipping rows another worker already has locked. Only meaningful
+// inside a transaction; the lock lasts until that transaction ends.
+func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id FROM transactions
+		WHERE status = 'pending' AND expires_at <= $1
+		ORDER BY expires_at
+		LIMIT $2
+		FOR UPDATE SKIP LOCKED`, now, limit)
+	if err != nil {
+		return nil, errdefs.Internalf(err, "due holds")
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, errdefs.Internalf(err, "scan due hold")
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "due holds rows")
+	}
+	return ids, nil
 }

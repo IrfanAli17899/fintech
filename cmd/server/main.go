@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/irfanali17899/fintech/internal/ledger"
 	"github.com/irfanali17899/fintech/pkg/database"
@@ -15,7 +19,9 @@ func main() {
 	if dbURL == "" {
 		dbURL = "postgres://fintech:fintech@localhost:5432/fintech?sslmode=disable"
 	}
-	ctx := context.Background()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	db, err := database.Connect(ctx, dbURL)
 	if err != nil {
@@ -27,21 +33,29 @@ func main() {
 		log.Fatalf("database migrations failed: %v", err)
 	}
 
-	mux := http.NewServeMux()
-
 	ledgerMod := ledger.New(db)
 	if err := ledgerMod.Seed(ctx); err != nil {
 		log.Fatalf("seeding failed: %v", err)
 	}
+	ledgerMod.Start(ctx)
+	defer ledgerMod.Stop()
+
+	mux := http.NewServeMux()
 	ledgerMod.RegisterRoutes(mux)
+	server := &http.Server{Addr: ":4000", Handler: mux}
 
-	server := &http.Server{
-		Addr:    ":4000",
-		Handler: mux,
-	}
+	go func() {
+		log.Println("listening on :4000")
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
 
-	log.Println("listening on :4000")
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	<-ctx.Done()
+	log.Println("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("server shutdown: %v", err)
 	}
 }

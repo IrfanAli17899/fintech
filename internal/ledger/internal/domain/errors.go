@@ -32,6 +32,7 @@ var (
 	CodeInvalidTransactionStatus = "INVALID_TRANSACTION_STATUS"
 	CodeTransactionNotPending    = "TRANSACTION_NOT_PENDING"
 	CodeCaptureExceedsHold       = "CAPTURE_EXCEEDS_HOLD"
+	CodeExpiryOnNonPending       = "EXPIRY_ON_NON_PENDING"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -141,6 +142,11 @@ func ErrTransactionNotPending(id uuid.UUID, status TransactionStatus) *errdefs.E
 func ErrCaptureExceedsHold(id uuid.UUID, held, requested int64) *errdefs.Error {
 	return errdefs.Validationf(CodeCaptureExceedsHold,
 		"hold %s is for %d, capture of %d requested", id, held, requested)
+}
+
+func ErrExpiryOnNonPending(s TransactionStatus) *errdefs.Error {
+	return errdefs.Validationf(CodeExpiryOnNonPending,
+		"expires_at is only valid on pending transactions, got %s", s)
 }
 
 // Internal signal from the repo that the key already exists; the service

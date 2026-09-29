@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
@@ -795,6 +797,115 @@ func TestVoid_AfterPartialReleasesRest(t *testing.T) {
 	}
 	if s := f.balance(t, shop); s.Posted != 300 || s.PendingIn != 0 {
 		t.Fatalf("shop: %+v", s)
+	}
+	f.verifyClean(t)
+}
+
+func holdExpiring(from, to uuid.UUID, amt int64, at time.Time) domain.Transaction {
+	h := hold(from, to, amt, uuid.NewString())
+	h.ExpiresAt = &at
+	return h
+}
+
+func TestExpireHolds_VoidsPastDue(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, holdExpiring(ali, shop, 500, time.Now().Add(-time.Minute)))
+
+	n, err := f.ledger.ExpireHolds(f.ctx, time.Now(), 100)
+	must(t, err)
+	if n < 1 {
+		t.Fatalf("expired %d, want at least 1", n)
+	}
+	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if got.Status != domain.TransactionStatusVoided {
+		t.Fatalf("status = %s, want voided", got.Status)
+	}
+	if b := f.balance(t, ali); b.PendingOut != 0 || b.Available != 1000 {
+		t.Fatalf("reservation not released: %+v", b)
+	}
+	f.verifyClean(t)
+}
+
+func TestExpireHolds_LeavesFutureAlone(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, holdExpiring(ali, shop, 500, time.Now().Add(time.Hour)))
+
+	_, err := f.ledger.ExpireHolds(f.ctx, time.Now(), 100)
+	must(t, err)
+	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if got.Status != domain.TransactionStatusPending {
+		t.Fatalf("future hold touched: %s", got.Status)
+	}
+}
+
+func TestExpireHolds_PartiallyCapturedReleasesRest(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, holdExpiring(ali, shop, 500, time.Now().Add(-time.Minute)))
+	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+
+	_, err = f.ledger.ExpireHolds(f.ctx, time.Now(), 100)
+	must(t, err)
+	a := f.balance(t, ali)
+	if a.Posted != 700 || a.PendingOut != 0 || a.Available != 700 {
+		t.Fatalf("ali: %+v", a)
+	}
+	f.verifyClean(t)
+}
+
+func TestExpireHolds_ConcurrentWorkersVoidEachOnce(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	shop := f.account(t, domain.AccountLiability)
+	const n = 20
+	ids := make([]uuid.UUID, n)
+	for i := range ids {
+		w := f.account(t, domain.AccountLiability)
+		f.post(t, transfer(cash, w, 100, uuid.NewString()))
+		ids[i] = f.post(t, holdExpiring(w, shop, 100, time.Now().Add(-time.Minute))).ID
+	}
+
+	var wg sync.WaitGroup
+	var total atomic.Int64
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				n, err := f.ledger.ExpireHolds(f.ctx, time.Now(), 5)
+				if err != nil {
+					t.Errorf("expire: %v", err)
+					return
+				}
+				if n == 0 {
+					return
+				}
+				total.Add(int64(n))
+			}
+		}()
+	}
+	wg.Wait()
+
+	for _, id := range ids {
+		got, err := f.ledger.GetTransaction(f.ctx, id)
+		must(t, err)
+		if got.Status != domain.TransactionStatusVoided {
+			t.Fatalf("hold %s not voided", id)
+		}
 	}
 	f.verifyClean(t)
 }

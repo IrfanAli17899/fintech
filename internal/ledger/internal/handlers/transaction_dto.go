@@ -18,6 +18,7 @@ type createTransactionRequest struct {
 	Kind           string         `json:"kind"`
 	Status         string         `json:"status,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`
+	ExpiresAt      *time.Time     `json:"expires_at,omitempty"`
 	Entries        []entryRequest `json:"entries"`
 }
 
@@ -33,6 +34,7 @@ func (r createTransactionRequest) toDomain() domain.Transaction {
 	return domain.Transaction{
 		Kind:           domain.TransactionKind(r.Kind),
 		Status:         domain.TransactionStatus(r.Status),
+		ExpiresAt:      r.ExpiresAt,
 		IdempotencyKey: r.IdempotencyKey,
 		Entries:        entries,
 	}
@@ -51,6 +53,7 @@ type transactionResponse struct {
 	Kind      string          `json:"kind"`
 	Status    string          `json:"status"`
 	ParentID  *uuid.UUID      `json:"parent_id,omitempty"`
+	ExpiresAt *time.Time      `json:"expires_at,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	PostedAt  *time.Time      `json:"posted_at,omitempty"`
 	Entries   []entryResponse `json:"entries"`
@@ -88,6 +91,7 @@ func toTransactionResponse(t *domain.Transaction) *transactionResponse {
 		Kind:      string(t.Kind),
 		Status:    string(t.Status),
 		ParentID:  t.ParentID,
+		ExpiresAt: t.ExpiresAt,
 		CreatedAt: t.CreatedAt,
 		PostedAt:  t.PostedAt,
 		Entries:   entries,

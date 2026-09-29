@@ -48,7 +48,10 @@ var validEntryDirection = map[EntryDirection]bool{
 // would be needed to wrap, far beyond any realistic transaction.
 // each entry is capped at 10^5 and to overflow int64 you need at least
 // ~92K such entries which is not realistic
-const MaxEntryAmount int64 = 1_000_000_000_000_000
+const (
+	MaxEntryAmount int64 = 1_000_000_000_000_000
+	DefaultHoldTTL       = 7 * 24 * time.Hour
+)
 
 type Transaction struct {
 	ID             uuid.UUID
@@ -56,6 +59,7 @@ type Transaction struct {
 	Kind           TransactionKind
 	ParentID       *uuid.UUID
 	Status         TransactionStatus
+	ExpiresAt      *time.Time
 	CreatedAt      time.Time
 	PostedAt       *time.Time
 	Entries        []Entry
@@ -240,4 +244,16 @@ func fixShortfall(entries []Entry, dir EntryDirection, want int64) {
 	if largest >= 0 && sum < want {
 		entries[largest].Amount += want - sum
 	}
+}
+
+// Consumed returns how much of t's total has been consumed by children,
+// given their per-account sums.
+func (t Transaction) Consumed(byAccount map[uuid.UUID]int64) int64 {
+	var n int64
+	for _, e := range t.Entries {
+		if e.Direction == EntryDirectionDebit {
+			n += byAccount[e.AccountID]
+		}
+	}
+	return n
 }

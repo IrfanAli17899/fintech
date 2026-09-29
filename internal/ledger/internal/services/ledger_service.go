@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
 	"github.com/irfanali17899/fintech/pkg/database"
+	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
 type CaptureCommand struct {
@@ -62,6 +64,10 @@ func NewLedgerService(
 func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain.Transaction, bool, error) {
 	if t.Status == "" {
 		t.Status = domain.TransactionStatusPosted
+	}
+	if t.Status == domain.TransactionStatusPending && t.ExpiresAt == nil {
+		exp := time.Now().Add(domain.DefaultHoldTTL)
+		t.ExpiresAt = &exp
 	}
 	if err := t.Validate(); err != nil {
 		return nil, false, err
@@ -136,12 +142,8 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 		if err != nil {
 			return err
 		}
-		var reversed int64
-		for _, e := range original.Entries {
-			if e.Direction == domain.EntryDirectionDebit {
-				reversed += reversedBy[e.AccountID]
-			}
-		}
+
+		reversed := original.Consumed(reversedBy)
 		total := original.Total()
 		amount := cmd.Amount
 		if amount == 0 {
@@ -206,12 +208,8 @@ func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domai
 		if err != nil {
 			return err
 		}
-		var captured int64
-		for _, e := range h.Entries {
-			if e.Direction == domain.EntryDirectionDebit {
-				captured += capturedBy[e.AccountID]
-			}
-		}
+
+		captured := h.Consumed(capturedBy)
 		held := h.Total()
 		remaining := held - captured
 		amount := cmd.Amount
@@ -284,12 +282,8 @@ func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Tran
 		if err != nil {
 			return err
 		}
-		var captured int64
-		for _, e := range h.Entries {
-			if e.Direction == domain.EntryDirectionDebit {
-				captured += capturedBy[e.AccountID]
-			}
-		}
+
+		captured := h.Consumed(capturedBy)
 		if remaining := h.Total() - captured; remaining > 0 {
 			rest := domain.Transaction{Entries: h.Scaled(remaining, capturedBy)}
 			if err := s.releaseReservation(ctx, r, pendingSums(rest)); err != nil {
@@ -307,6 +301,35 @@ func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Tran
 		return nil, false, err
 	}
 	return voided, replayed, nil
+}
+
+// ExpireHolds voids every pending transaction past its expiry, in batches of
+// batchSize, each void in its own transaction. Safe to run concurrently on
+// several replicas: DueHolds uses SKIP LOCKED to partition the work.
+func (s *LedgerService) ExpireHolds(ctx context.Context, now time.Time, batchSize int) (int, error) {
+	var ids []uuid.UUID
+	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		ids, err = s.repos(tx).txns.ExpiredHolds(ctx, now, batchSize)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	voided := 0
+	for _, id := range ids {
+		_, _, err := s.Void(ctx, VoidCommand{HoldID: id, IdempotencyKey: "expire:" + id.String()})
+		switch {
+		case err == nil:
+			voided++
+		case errdefs.Is(err, domain.CodeTransactionNotPending):
+			// captured or voided by someone else between select and void; fine
+		default:
+			return voided, err
+		}
+	}
+	return voided, nil
 }
 
 // ---- posting pipeline ----
