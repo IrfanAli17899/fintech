@@ -32,7 +32,7 @@ func (r *IdempotencyRepo) Insert(ctx context.Context, key, hash string, resource
 	// replay will not be able to proceed
 	err := r.db.QueryRowContext(ctx,
 		`
-		INSERT INTO idempotency_keys (key, request_hash, resource_type)
+		INSERT INTO ledger.idempotency_keys (key, request_hash, resource_type)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (key) DO NOTHING
 		RETURNING created_at
@@ -60,7 +60,7 @@ func (r *IdempotencyRepo) Get(ctx context.Context, key string) (*domain.Idempote
 	k := domain.IdempotencyKey{}
 
 	err := r.db.QueryRowContext(ctx,
-		`SELECT key, request_hash, resource_type, resource_id, created_at FROM idempotency_keys
+		`SELECT key, request_hash, resource_type, resource_id, created_at FROM ledger.idempotency_keys
 		WHERE key=$1
 		`,
 		key,
@@ -78,7 +78,7 @@ func (r *IdempotencyRepo) Get(ctx context.Context, key string) (*domain.Idempote
 
 func (r *IdempotencyRepo) SetResource(ctx context.Context, key string, resourceID uuid.UUID) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE idempotency_keys SET resource_id = $2 WHERE key = $1`, key, resourceID)
+		`UPDATE ledger.idempotency_keys SET resource_id = $2 WHERE key = $1`, key, resourceID)
 	if err != nil {
 		return errdefs.Internalf(err, "set idempotency resource")
 	}

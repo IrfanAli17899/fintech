@@ -7,7 +7,8 @@ up:
 	docker compose up -d
 
 db-reset:
-	docker compose exec postgres psql -U fintech -d fintech -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+	docker compose exec postgres psql -U fintech -d fintech -c \
+	  "DROP SCHEMA IF EXISTS public CASCADE; DROP SCHEMA IF EXISTS ledger CASCADE; DROP SCHEMA IF EXISTS rails CASCADE; CREATE SCHEMA public;"
 
 db-shell:
 	docker compose exec postgres psql -U fintech -d fintech
@@ -19,4 +20,4 @@ migrate-down:
 	migrate -path migrations -database "$(DB_URL)" down 1
 
 test:
-	go test ./...
+	go test -count=1 -race ./...

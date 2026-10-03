@@ -1,4 +1,4 @@
-CREATE TABLE idempotency_keys (
+CREATE TABLE ledger.idempotency_keys (
   key           TEXT PRIMARY KEY,
   request_hash  TEXT NOT NULL,
   resource_type TEXT NOT NULL,          -- 'transaction', later 'capture', 'void'

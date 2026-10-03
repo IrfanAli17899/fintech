@@ -33,8 +33,8 @@ func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*do
 		t.ID = uuid.Must(uuid.NewV7())
 	}
 	err := r.db.QueryRowContext(ctx,
-		`INSERT INTO transactions (id, kind, status, parent_id, rail, rail_ref, expires_at, posted_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $3::transaction_status = 'posted' THEN now() END)
+		`INSERT INTO ledger.transactions (id, kind, status, parent_id, rail, rail_ref, expires_at, posted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $3::ledger.transaction_status = 'posted' THEN now() END)
 		 RETURNING created_at, posted_at`,
 		t.ID, t.Kind, t.Status, t.ParentID, t.Rail, t.RailRef, t.ExpiresAt,
 	).Scan(&t.CreatedAt, &t.PostedAt)
@@ -54,7 +54,7 @@ func (r *TransactionRepo) LockByID(ctx context.Context, id uuid.UUID) (*domain.T
 }
 
 func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*domain.Transaction, error) {
-	q := `SELECT ` + transactionColumns + ` FROM transactions WHERE id = $1`
+	q := `SELECT ` + transactionColumns + ` FROM ledger.transactions WHERE id = $1`
 	if lock {
 		q += ` FOR UPDATE`
 	}
@@ -74,8 +74,8 @@ func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*do
 func (r *TransactionRepo) ChildAmountsByAccount(ctx context.Context, parentID uuid.UUID, kind domain.TransactionKind) (map[uuid.UUID]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.account_id, SUM(e.amount)
-		FROM transactions t
-		JOIN entries e ON e.transaction_id = t.id
+		FROM ledger.transactions t
+		JOIN ledger.entries e ON e.transaction_id = t.id
 		WHERE t.parent_id = $1 AND t.kind = $2 AND t.status = 'posted'
 		GROUP BY e.account_id`, parentID, kind)
 	if err != nil {
@@ -100,7 +100,7 @@ func (r *TransactionRepo) ChildAmountsByAccount(ctx context.Context, parentID uu
 
 func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE transactions SET status = 'voided' WHERE id = $1 AND status = 'pending'`, id)
+		`UPDATE ledger.transactions SET status = 'voided' WHERE id = $1 AND status = 'pending'`, id)
 	if err != nil {
 		return errdefs.Internalf(err, "mark voided")
 	}
@@ -115,7 +115,7 @@ func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID) error {
 // inside a transaction; the lock lasts until that transaction ends.
 func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id FROM transactions
+		SELECT id FROM ledger.transactions
 		WHERE status = 'pending' AND expires_at <= $1
 		ORDER BY expires_at
 		LIMIT $2

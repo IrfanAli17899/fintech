@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION reject_mutation() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION ledger.reject_mutation() RETURNS trigger AS $$
 BEGIN
   RAISE EXCEPTION 'ledger tables are append-only: % on % not allowed', TG_OP, TG_TABLE_NAME
     USING ERRCODE = 'restrict_violation';
@@ -6,14 +6,14 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER entries_immutable
-  BEFORE UPDATE OR DELETE ON entries
-  FOR EACH ROW EXECUTE FUNCTION reject_mutation();
+  BEFORE UPDATE OR DELETE ON ledger.entries
+  FOR EACH ROW EXECUTE FUNCTION ledger.reject_mutation();
 
 CREATE TRIGGER transactions_no_delete
-  BEFORE DELETE ON transactions
-  FOR EACH ROW EXECUTE FUNCTION reject_mutation();
+  BEFORE DELETE ON ledger.transactions
+  FOR EACH ROW EXECUTE FUNCTION ledger.reject_mutation();
 
-CREATE OR REPLACE FUNCTION transactions_restrict_update() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION ledger.transactions_restrict_update() RETURNS trigger AS $$
 BEGIN
   IF NEW.id <> OLD.id
      OR NEW.kind <> OLD.kind
@@ -27,8 +27,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER transactions_immutable
-  BEFORE UPDATE ON transactions
-  FOR EACH ROW EXECUTE FUNCTION transactions_restrict_update();
+  BEFORE UPDATE ON ledger.transactions
+  FOR EACH ROW EXECUTE FUNCTION ledger.transactions_restrict_update();
 
-REVOKE UPDATE, DELETE ON entries FROM fintech;
-REVOKE DELETE ON transactions FROM fintech;
+REVOKE UPDATE, DELETE ON ledger.entries FROM fintech;
+REVOKE DELETE ON ledger.transactions FROM fintech;

@@ -1,0 +1,1 @@
+ALTER TABLE ledger.transactions DROP COLUMN IF EXISTS rail, DROP COLUMN IF EXISTS rail_ref;

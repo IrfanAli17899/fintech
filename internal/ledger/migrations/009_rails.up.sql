@@ -1,6 +1,8 @@
-ALTER TABLE transactions ADD COLUMN rail TEXT, ADD COLUMN rail_ref TEXT;
+ALTER TABLE ledger.transactions
+  ADD COLUMN rail     TEXT NOT NULL DEFAULT '',
+  ADD COLUMN rail_ref TEXT NOT NULL DEFAULT '';
 
-CREATE OR REPLACE FUNCTION transactions_restrict_update() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION ledger.transactions_restrict_update() RETURNS trigger AS $$
 BEGIN
   IF NEW.id <> OLD.id
      OR NEW.kind <> OLD.kind

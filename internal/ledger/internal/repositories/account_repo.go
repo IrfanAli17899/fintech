@@ -37,7 +37,7 @@ func scanAccounts(rows *sql.Rows) ([]domain.Account, error) {
 
 func (r *AccountRepo) Create(ctx context.Context, a domain.Account) (*domain.Account, error) {
 	err := r.db.QueryRowContext(ctx,
-		`INSERT INTO accounts (owner_type, owner_id, currency, type) 
+		`INSERT INTO ledger.accounts (owner_type, owner_id, currency, type) 
 		VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
 		a.OwnerType, a.OwnerID, a.Currency, a.Type,
 	).Scan(&a.ID, &a.CreatedAt)
@@ -56,7 +56,7 @@ func (r *AccountRepo) Create(ctx context.Context, a domain.Account) (*domain.Acc
 func (r *AccountRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Account, error) {
 	var a domain.Account
 	err := r.db.QueryRowContext(ctx,
-		`SELECT `+accountColumns+` from accounts where id=$1`,
+		`SELECT `+accountColumns+` from ledger.accounts where id=$1`,
 		id).Scan(&a.ID, &a.OwnerType, &a.OwnerID, &a.Currency, &a.Type, &a.CreatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -79,7 +79,7 @@ func (r *AccountRepo) SeedAccounts(ctx context.Context) ([]uuid.UUID, error) {
 
 	for i, s := range seeds {
 		err := r.db.QueryRowContext(ctx,
-			`INSERT INTO accounts (owner_type, owner_id, currency, type)
+			`INSERT INTO ledger.accounts (owner_type, owner_id, currency, type)
 			 VALUES ($1, $2, $3, $4)
 			 ON CONFLICT (owner_type, owner_id, currency, type) DO UPDATE SET owner_id = EXCLUDED.owner_id RETURNING id`,
 			s.OwnerType, s.OwnerID, s.Currency, s.Type,
@@ -95,7 +95,7 @@ func (r *AccountRepo) SeedAccounts(ctx context.Context) ([]uuid.UUID, error) {
 func (r *AccountRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]domain.Account, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, owner_type, owner_id, currency, type, created_at
-		 FROM accounts WHERE id = ANY($1)`,
+		 FROM ledger.accounts WHERE id = ANY($1)`,
 		ids)
 
 	if err != nil {
@@ -118,7 +118,7 @@ func (r *AccountRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.U
 func (r *AccountRepo) ListByOwner(ctx context.Context, ownerType domain.OwnerType, ownerID string) ([]domain.Account, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+accountColumns+`
-		 FROM accounts WHERE owner_type = $1 AND owner_id = $2 ORDER BY created_at`,
+		 FROM ledger.accounts WHERE owner_type = $1 AND owner_id = $2 ORDER BY created_at`,
 		ownerType, ownerID)
 
 	if err != nil {

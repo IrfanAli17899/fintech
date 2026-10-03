@@ -52,8 +52,8 @@ func (r *EntryRepo) CreateMany(ctx context.Context, entries []domain.Entry) ([]d
 	}
 
 	rows, err := r.db.QueryContext(ctx,
-		`INSERT INTO entries (transaction_id, account_id, amount, direction)
-		 SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::bigint[], $4::entry_direction[])
+		`INSERT INTO ledger.entries (transaction_id, account_id, amount, direction)
+		 SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::bigint[], $4::ledger.entry_direction[])
 		 RETURNING `+entryColumns,
 		txIDs, accIDs, amounts, dirs,
 	)
@@ -72,7 +72,7 @@ func (r *EntryRepo) CreateMany(ctx context.Context, entries []domain.Entry) ([]d
 func (r *EntryRepo) ListByTransaction(ctx context.Context, txID uuid.UUID) ([]domain.Entry, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+entryColumns+
-			` FROM entries WHERE transaction_id = $1 ORDER BY created_at, id`, txID)
+			` FROM ledger.entries WHERE transaction_id = $1 ORDER BY created_at, id`, txID)
 
 	if err != nil {
 		return nil, errdefs.Internalf(err, "list entries")

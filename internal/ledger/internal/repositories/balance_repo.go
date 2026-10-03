@@ -27,7 +27,7 @@ const balanceColumns = `account_id, ` + sumColumns + `, updated_at`
 func (r *BalanceRepo) GetBalance(ctx context.Context, accountID uuid.UUID) (*domain.AccountSums, error) {
 	var s domain.AccountSums
 	err := r.db.QueryRowContext(ctx,
-		`SELECT `+sumColumns+` FROM balances WHERE account_id=$1`,
+		`SELECT `+sumColumns+` FROM ledger.balances WHERE account_id=$1`,
 		accountID).Scan(&s.Debits, &s.Credits, &s.PendingDebits, &s.PendingCredits)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -42,7 +42,7 @@ func (r *BalanceRepo) GetBalance(ctx context.Context, accountID uuid.UUID) (*dom
 
 func (r *BalanceRepo) Apply(ctx context.Context, accountID uuid.UUID, s domain.AccountSums) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO balances (account_id, debits, credits, pending_debits, pending_credits)
+		`INSERT INTO ledger.balances (account_id, debits, credits, pending_debits, pending_credits)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (account_id) DO UPDATE
 		SET debits = balances.debits  + EXCLUDED.debits,
@@ -77,20 +77,20 @@ const liveBalancesCTE = `
 			WHEN t.status = 'pending' AND e.direction = 'credit' THEN e.amount
 			WHEN t.status = 'posted' AND p.status = 'pending' AND e.direction = 'credit' THEN -e.amount
 		END), 0) AS pending_credits
-	FROM entries e
-	JOIN transactions t ON t.id = e.transaction_id
-	LEFT JOIN transactions p ON p.id = t.parent_id
+	FROM ledger.entries e
+	JOIN ledger.transactions t ON t.id = e.transaction_id
+	LEFT JOIN ledger.transactions p ON p.id = t.parent_id
 	WHERE t.status IN ('posted', 'pending')
 	GROUP BY e.account_id
 `
 
 func (r *BalanceRepo) RebuildAll(ctx context.Context) error {
-	if _, err := r.db.ExecContext(ctx, `TRUNCATE balances`); err != nil {
+	if _, err := r.db.ExecContext(ctx, `TRUNCATE ledger.balances`); err != nil {
 		return errdefs.Internalf(err, "truncate balances")
 	}
 
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO balances (account_id, `+sumColumns+`) `+liveBalancesCTE); err != nil {
+		`INSERT INTO ledger.balances (account_id, `+sumColumns+`) `+liveBalancesCTE); err != nil {
 		return errdefs.Internalf(err, "rebuild balances")
 	}
 	return nil
@@ -104,7 +104,7 @@ func (r *BalanceRepo) Verify(ctx context.Context) ([]domain.BalanceMismatch, err
 		COALESCE(b.pending_debits, 0),  COALESCE(b.pending_credits, 0),
 		COALESCE(l.debits, 0),          COALESCE(l.credits, 0),
 		COALESCE(l.pending_debits, 0),  COALESCE(l.pending_credits, 0)
-	FROM balances b
+	FROM ledger.balances b
 	FULL OUTER JOIN live l ON l.account_id = b.account_id
 	WHERE COALESCE(b.debits, 0)          <> COALESCE(l.debits, 0)
 	OR COALESCE(b.credits, 0)         <> COALESCE(l.credits, 0)
@@ -143,7 +143,7 @@ func (r *BalanceRepo) Verify(ctx context.Context) ([]domain.BalanceMismatch, err
 // Only meaningful inside a transaction.
 func (r *BalanceRepo) LockAndGet(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]domain.AccountSums, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	SELECT account_id, `+sumColumns+` FROM balances WHERE account_id = ANY($1)
+	SELECT account_id, `+sumColumns+` FROM ledger.balances WHERE account_id = ANY($1)
 	ORDER BY account_id
 	FOR UPDATE
 	`, ids)
@@ -172,7 +172,7 @@ func (r *BalanceRepo) LockAndGet(ctx context.Context, ids []uuid.UUID) (map[uuid
 
 func (r *BalanceRepo) ReleasePending(ctx context.Context, accountID uuid.UUID, s domain.AccountSums) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE balances SET
+		UPDATE ledger.balances SET
 			pending_debits  = pending_debits  - $2,
 			pending_credits = pending_credits - $3,
 			updated_at      = now()
