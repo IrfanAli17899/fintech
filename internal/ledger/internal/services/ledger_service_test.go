@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
+	"github.com/irfanali17899/fintech/internal/rails"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
@@ -27,6 +29,10 @@ type fixture struct {
 }
 
 func setup(t *testing.T) fixture {
+	return setupWith(t, rails.New())
+}
+
+func setupWith(t *testing.T, reg api.RailRegistry) fixture {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -47,7 +53,7 @@ func setup(t *testing.T) fixture {
 
 	return fixture{
 		ctx:      ctx,
-		ledger:   services.NewLedgerService(db, acc, txn, ent, bal, idem),
+		ledger:   services.NewLedgerService(db, acc, txn, ent, bal, idem, reg),
 		accounts: services.NewAccountService(db, acc, bal),
 		admin:    services.NewAdminService(db, bal),
 	}
@@ -908,4 +914,97 @@ func TestExpireHolds_ConcurrentWorkersVoidEachOnce(t *testing.T) {
 		}
 	}
 	f.verifyClean(t)
+}
+
+// ---- story 15: rails ----
+
+func TestPost_UnknownRail(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Rail = "carrier-pigeon"
+	_, _, err := f.ledger.Post(f.ctx, x)
+	if !errdefs.Is(err, domain.CodeUnknownRail) {
+		t.Fatalf("want UNKNOWN_RAIL, got %v", err)
+	}
+}
+
+func TestPost_InternalRailIsImmediate(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	got := f.post(t, transfer(cash, ali, 100, uuid.NewString()))
+	if got.Rail != domain.RailInternal || got.RailRef == "" || got.Status != domain.TransactionStatusPosted {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestPost_DeferredRailLandsPending(t *testing.T) {
+	deferred := fakeRail{
+		name:  "fake",
+		props: api.RailProperties{SettlementDelay: 48 * time.Hour, CanBounce: true},
+		res:   api.RailInitiateResult{Ref: "prov-123", Settlement: api.SettlementDeferred},
+	}
+	f := setupWith(t, fakeRegistry{"internal": instantInternal, "fake": deferred})
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Kind, x.Rail = domain.TransactionKindTopup, "fake"
+	got := f.post(t, x)
+
+	if got.Status != domain.TransactionStatusPending || got.RailRef != "prov-123" {
+		t.Fatalf("%+v", got)
+	}
+	if got.ExpiresAt == nil {
+		t.Fatal("deferred rail must set an expiry")
+	}
+	want := time.Now().Add(48*time.Hour + domain.SettlementGrace)
+	if d := got.ExpiresAt.Sub(want); d < -time.Minute || d > time.Minute {
+		t.Fatalf("expires_at = %v, want ≈ %v", got.ExpiresAt, want)
+	}
+	if b := f.balance(t, ali); b.PendingIn != 100 || b.Posted != 0 {
+		t.Fatalf("ali: %+v", b)
+	}
+	f.verifyClean(t)
+}
+
+func TestPost_RailFailureRejects(t *testing.T) {
+	broken := fakeRail{name: "fake", err: errors.New("provider down")}
+	f := setupWith(t, fakeRegistry{"internal": instantInternal, "fake": broken})
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Rail = "fake"
+	_, _, err := f.ledger.Post(f.ctx, x)
+	if !errdefs.Is(err, domain.CodeRailFailed) {
+		t.Fatalf("want RAIL_FAILED, got %v", err)
+	}
+	if b := f.balance(t, ali); b.Posted != 0 || b.PendingIn != 0 {
+		t.Fatalf("nothing should have been written: %+v", b)
+	}
+}
+
+func TestReverse_IrreversibleRailRejected(t *testing.T) {
+	oneWay := fakeRail{
+		name:  "fake",
+		props: api.RailProperties{Instant: true, Reversible: false},
+		res:   api.RailInitiateResult{Ref: "r-1", Settlement: api.SettlementImmediate},
+	}
+	f := setupWith(t, fakeRegistry{"internal": instantInternal, "fake": oneWay})
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Kind, x.Rail = domain.TransactionKindTopup, "fake"
+	posted := f.post(t, x)
+
+	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailNotReversible) {
+		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
+	}
 }

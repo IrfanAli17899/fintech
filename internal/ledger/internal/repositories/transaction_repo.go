@@ -17,23 +17,30 @@ type TransactionRepo struct {
 }
 
 func NewTransactionRepo(db database.DBTX) *TransactionRepo {
-	return &TransactionRepo{db}
+	return &TransactionRepo{db: db}
 }
 
 func (r *TransactionRepo) WithTx(tx *sql.Tx) *TransactionRepo { return &TransactionRepo{db: tx} }
 
-func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
-	err := r.db.QueryRowContext(ctx,
-		`INSERT INTO transactions (kind, status, parent_id, expires_at, posted_at) 
-		VALUES ($1, $2, $3, $4, CASE WHEN $2::transaction_status = 'posted' THEN now() END) 
-		RETURNING id, status, created_at, expires_at, posted_at`,
-		t.Kind, t.Status, t.ParentID, t.ExpiresAt,
-	).Scan(&t.ID, &t.Status, &t.CreatedAt, &t.ExpiresAt, &t.PostedAt)
+const transactionColumns = `id, kind, status, parent_id, rail, rail_ref, expires_at, created_at, posted_at`
 
+func scanTransaction(row interface{ Scan(...any) error }, t *domain.Transaction) error {
+	return row.Scan(&t.ID, &t.Kind, &t.Status, &t.ParentID, &t.Rail, &t.RailRef, &t.ExpiresAt, &t.CreatedAt, &t.PostedAt)
+}
+
+func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
+	if t.ID == uuid.Nil {
+		t.ID = uuid.Must(uuid.NewV7())
+	}
+	err := r.db.QueryRowContext(ctx,
+		`INSERT INTO transactions (id, kind, status, parent_id, rail, rail_ref, expires_at, posted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $3::transaction_status = 'posted' THEN now() END)
+		 RETURNING created_at, posted_at`,
+		t.ID, t.Kind, t.Status, t.ParentID, t.Rail, t.RailRef, t.ExpiresAt,
+	).Scan(&t.CreatedAt, &t.PostedAt)
 	if err != nil {
 		return nil, errdefs.Internalf(err, "create transaction")
 	}
-
 	return &t, nil
 }
 
@@ -47,19 +54,15 @@ func (r *TransactionRepo) LockByID(ctx context.Context, id uuid.UUID) (*domain.T
 }
 
 func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*domain.Transaction, error) {
-	var t domain.Transaction
-
-	query := `SELECT id, kind, status, parent_id, created_at, expires_at, posted_at from transactions where id=$1`
+	q := `SELECT ` + transactionColumns + ` FROM transactions WHERE id = $1`
 	if lock {
-		query += ` FOR UPDATE`
+		q += ` FOR UPDATE`
 	}
-
-	err := r.db.QueryRowContext(ctx, query, id).Scan(&t.ID, &t.Kind, &t.Status, &t.ParentID, &t.CreatedAt, &t.ExpiresAt, &t.PostedAt)
-
+	var t domain.Transaction
+	err := scanTransaction(r.db.QueryRowContext(ctx, q, id), &t)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrTransactionNotFound(id)
 	}
-
 	if err != nil {
 		return nil, errdefs.Internalf(err, "get transaction")
 	}
@@ -107,8 +110,8 @@ func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// ExpiredHolds returns ids of pending transactions whose expiry has passed, at most
-// limit, skipping rows another worker already has locked. Only meaningful
+// ExpiredHolds returns ids of pending transactions whose expiry has passed, at
+// most limit, skipping rows another worker already holds. Only meaningful
 // inside a transaction; the lock lasts until that transaction ends.
 func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error) {
 	rows, err := r.db.QueryContext(ctx, `
@@ -118,7 +121,7 @@ func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit
 		LIMIT $2
 		FOR UPDATE SKIP LOCKED`, now, limit)
 	if err != nil {
-		return nil, errdefs.Internalf(err, "due holds")
+		return nil, errdefs.Internalf(err, "expired holds")
 	}
 	defer rows.Close()
 
@@ -126,12 +129,12 @@ func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit
 	for rows.Next() {
 		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
-			return nil, errdefs.Internalf(err, "scan due hold")
+			return nil, errdefs.Internalf(err, "scan expired hold")
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errdefs.Internalf(err, "due holds rows")
+		return nil, errdefs.Internalf(err, "expired holds rows")
 	}
 	return ids, nil
 }

@@ -33,6 +33,9 @@ var (
 	CodeTransactionNotPending    = "TRANSACTION_NOT_PENDING"
 	CodeCaptureExceedsHold       = "CAPTURE_EXCEEDS_HOLD"
 	CodeExpiryOnNonPending       = "EXPIRY_ON_NON_PENDING"
+	CodeUnknownRail              = "UNKNOWN_RAIL"
+	CodeRailFailed               = "RAIL_FAILED"
+	CodeRailNotReversible        = "RAIL_NOT_REVERSIBLE"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -147,6 +150,21 @@ func ErrCaptureExceedsHold(id uuid.UUID, held, requested int64) *errdefs.Error {
 func ErrExpiryOnNonPending(s TransactionStatus) *errdefs.Error {
 	return errdefs.Validationf(CodeExpiryOnNonPending,
 		"expires_at is only valid on pending transactions, got %s", s)
+}
+
+func ErrUnknownRail(name string) *errdefs.Error {
+	return errdefs.Validationf(CodeUnknownRail, "rail %q is not available", name)
+}
+
+func ErrRailFailed(name string, cause error) *errdefs.Error {
+	e := errdefs.Internalf(cause, "rail %s failed to initiate", name)
+	e.Code = CodeRailFailed
+	return e
+}
+
+func ErrRailNotReversible(id uuid.UUID, rail string) *errdefs.Error {
+	return errdefs.Validationf(CodeRailNotReversible,
+		"transaction %s was sent via %s, which does not support reversal", id, rail)
 }
 
 // Internal signal from the repo that the key already exists; the service

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/irfanali17899/fintech/internal/ledger"
+	"github.com/irfanali17899/fintech/internal/rails"
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 
@@ -33,7 +34,7 @@ func main() {
 		log.Fatalf("database migrations failed: %v", err)
 	}
 
-	ledgerMod := ledger.New(db)
+	ledgerMod := ledger.New(db, rails.New())
 	if err := ledgerMod.Seed(ctx); err != nil {
 		log.Fatalf("seeding failed: %v", err)
 	}

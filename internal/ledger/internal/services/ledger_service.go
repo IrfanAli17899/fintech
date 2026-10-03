@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
 	"github.com/irfanali17899/fintech/pkg/database"
@@ -37,6 +38,7 @@ type LedgerService struct {
 	entryRepo       *repositories.EntryRepo
 	balanceRepo     *repositories.BalanceRepo
 	idemRepo        *repositories.IdempotencyRepo
+	rails           api.RailRegistry
 }
 
 func NewLedgerService(
@@ -46,6 +48,7 @@ func NewLedgerService(
 	entryRepo *repositories.EntryRepo,
 	balanceRepo *repositories.BalanceRepo,
 	idemRepo *repositories.IdempotencyRepo,
+	rails api.RailRegistry,
 ) *LedgerService {
 	return &LedgerService{
 		txRunner:        txRunner,
@@ -54,6 +57,7 @@ func NewLedgerService(
 		entryRepo:       entryRepo,
 		balanceRepo:     balanceRepo,
 		idemRepo:        idemRepo,
+		rails:           rails,
 	}
 }
 
@@ -65,10 +69,7 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 	if t.Status == "" {
 		t.Status = domain.TransactionStatusPosted
 	}
-	if t.Status == domain.TransactionStatusPending && t.ExpiresAt == nil {
-		exp := time.Now().Add(domain.DefaultHoldTTL)
-		t.ExpiresAt = &exp
-	}
+
 	if err := t.Validate(); err != nil {
 		return nil, false, err
 	}
@@ -132,6 +133,9 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 		}
 		if original.Status != domain.TransactionStatusPosted {
 			return domain.ErrTransactionNotReversible(original.ID, original.Status)
+		}
+		if rail, ok := s.rails.Get(original.Rail); ok && !rail.Properties().Reversible {
+			return domain.ErrRailNotReversible(original.ID, original.Rail)
 		}
 		original.Entries, err = r.entries.ListByTransaction(ctx, original.ID)
 		if err != nil {
@@ -305,7 +309,7 @@ func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Tran
 
 // ExpireHolds voids every pending transaction past its expiry, in batches of
 // batchSize, each void in its own transaction. Safe to run concurrently on
-// several replicas: DueHolds uses SKIP LOCKED to partition the work.
+// several replicas: ExpiredHolds uses SKIP LOCKED to partition the work.
 func (s *LedgerService) ExpireHolds(ctx context.Context, now time.Time, batchSize int) (int, error) {
 	var ids []uuid.UUID
 	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
@@ -357,9 +361,21 @@ func (s *LedgerService) repos(tx *sql.Tx) txRepos {
 // check, and persistence. The caller owns the tx, the idempotency claim, and
 // any follow-up such as status flips or key linking.
 func (s *LedgerService) post(ctx context.Context, r txRepos, t domain.Transaction) (*domain.Transaction, error) {
-	accMap, err := s.resolveAccounts(ctx, r, t)
+	if t.ID == uuid.Nil {
+		t.ID = uuid.Must(uuid.NewV7())
+	}
+
+	accMap, currency, err := s.resolveAccounts(ctx, r, t)
+
 	if err != nil {
 		return nil, err
+	}
+	if err := s.initiateRail(ctx, &t, currency); err != nil {
+		return nil, err
+	}
+	if t.Status == domain.TransactionStatusPending && t.ExpiresAt == nil {
+		exp := time.Now().Add(domain.DefaultHoldTTL)
+		t.ExpiresAt = &exp
 	}
 	if err := s.checkFunds(ctx, r, t, accMap); err != nil {
 		return nil, err
@@ -369,26 +385,53 @@ func (s *LedgerService) post(ctx context.Context, r txRepos, t domain.Transactio
 
 // resolveAccounts loads every account the transaction touches and enforces
 // existence and a single currency.
-func (s *LedgerService) resolveAccounts(ctx context.Context, r txRepos, t domain.Transaction) (map[uuid.UUID]domain.Account, error) {
+func (s *LedgerService) resolveAccounts(ctx context.Context, r txRepos, t domain.Transaction) (map[uuid.UUID]domain.Account, string, error) {
 	ids := t.AccountIDs()
 	accMap, err := r.accounts.GetByIDs(ctx, ids)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var currency string
 	for _, id := range ids {
 		acc, ok := accMap[id]
 		if !ok {
-			return nil, domain.ErrAccountNotFound(id)
+			return nil, "", domain.ErrAccountNotFound(id)
 		}
 		if currency == "" {
 			currency = acc.Currency
 		}
 		if acc.Currency != currency {
-			return nil, domain.ErrCurrencyMismatch(acc.ID, currency, acc.Currency)
+			return nil, "", domain.ErrCurrencyMismatch(acc.ID, currency, acc.Currency)
 		}
 	}
-	return accMap, nil
+	return accMap, currency, nil
+}
+
+// initiateRail asks the transaction's rail to begin moving funds and lets the
+// rail's answer decide whether this posts now or stays pending.
+func (s *LedgerService) initiateRail(ctx context.Context, t *domain.Transaction, currency string) error {
+	if t.Rail == "" {
+		t.Rail = domain.RailInternal
+	}
+	rail, ok := s.rails.Get(t.Rail)
+	if !ok {
+		return domain.ErrUnknownRail(t.Rail)
+	}
+	res, err := rail.Initiate(ctx, api.RailInitiateRequest{
+		TransactionID: t.ID, Amount: t.Total(), Currency: currency, Kind: string(t.Kind),
+	})
+	if err != nil {
+		return domain.ErrRailFailed(t.Rail, err)
+	}
+	t.RailRef = res.Ref
+	if res.Settlement == api.SettlementDeferred {
+		t.Status = domain.TransactionStatusPending
+		if t.ExpiresAt == nil {
+			exp := time.Now().Add(rail.Properties().SettlementDelay + domain.SettlementGrace)
+			t.ExpiresAt = &exp
+		}
+	}
+	return nil
 }
 
 // checkFunds locks the balance rows of every touched account (ids are sorted,

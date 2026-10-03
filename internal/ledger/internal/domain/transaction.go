@@ -51,6 +51,11 @@ var validEntryDirection = map[EntryDirection]bool{
 const (
 	MaxEntryAmount int64 = 1_000_000_000_000_000
 	DefaultHoldTTL       = 7 * 24 * time.Hour
+	// RailInternal is the rail for money that never leaves the ledger.
+	RailInternal = "internal"
+	// SettlementGrace is added to a rail's settlement delay when deriving a
+	// deferred transaction's expiry, so a slow provider isn't voided prematurely.
+	SettlementGrace = 48 * time.Hour
 )
 
 type Transaction struct {
@@ -63,6 +68,9 @@ type Transaction struct {
 	CreatedAt      time.Time
 	PostedAt       *time.Time
 	Entries        []Entry
+
+	Rail    string // empty = internal
+	RailRef string // provider reference set by the rail
 }
 
 type Entry struct {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/handlers"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
@@ -19,7 +20,7 @@ type Module struct {
 	handlers []interface{ RegisterRoutes(*http.ServeMux) }
 }
 
-func New(db *database.DB) *Module {
+func New(db *database.DB, rails api.RailRegistry) *Module {
 	accRepo := repositories.NewAccountRepo(db)
 	txnRepo := repositories.NewTransactionRepo(db)
 	entryRepo := repositories.NewEntryRepo(db)
@@ -27,7 +28,7 @@ func New(db *database.DB) *Module {
 	idemRepo := repositories.NewIdempotencyRepo(db)
 
 	accSvc := services.NewAccountService(db, accRepo, balanceRepo)
-	ledgerSvc := services.NewLedgerService(db, accRepo, txnRepo, entryRepo, balanceRepo, idemRepo)
+	ledgerSvc := services.NewLedgerService(db, accRepo, txnRepo, entryRepo, balanceRepo, idemRepo, rails)
 	adminSvc := services.NewAdminService(db, balanceRepo)
 
 	return &Module{

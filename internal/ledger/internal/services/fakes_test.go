@@ -1,0 +1,39 @@
+package services_test
+
+import (
+	"context"
+
+	"github.com/irfanali17899/fintech/internal/ledger/api"
+)
+
+// fakeRail returns a canned Initiate result; Settle and Reverse are no-ops.
+type fakeRail struct {
+	name  string
+	props api.RailProperties
+	res   api.RailInitiateResult
+	err   error
+}
+
+func (f fakeRail) Name() string                   { return f.name }
+func (f fakeRail) Properties() api.RailProperties { return f.props }
+func (f fakeRail) Initiate(context.Context, api.RailInitiateRequest) (api.RailInitiateResult, error) {
+	return f.res, f.err
+}
+func (fakeRail) Settle(context.Context, string) error         { return nil }
+func (fakeRail) Reverse(context.Context, string, int64) error { return nil }
+
+// fakeRegistry is a map that satisfies api.RailRegistry.
+type fakeRegistry map[string]api.Rail
+
+func (r fakeRegistry) Get(name string) (api.Rail, bool) {
+	x, ok := r[name]
+	return x, ok
+}
+
+// instantInternal mirrors the real internal rail so tests using a fake
+// registry still have a default rail.
+var instantInternal = fakeRail{
+	name:  "internal",
+	props: api.RailProperties{Instant: true, Reversible: true},
+	res:   api.RailInitiateResult{Settlement: api.SettlementImmediate},
+}
