@@ -7,5 +7,9 @@ import (
 
 // New returns the registry of available rails.
 func New() api.RailRegistry {
-	return internal.NewRegistry(internal.NullRail{})
+	return internal.NewRegistry(
+		internal.NullRail{},
+		internal.NewRTPRail("raast", "PKR"),
+		internal.NewRTPRail("sarie", "SAR"),
+	)
 }

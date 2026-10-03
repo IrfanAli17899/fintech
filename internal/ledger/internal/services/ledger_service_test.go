@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1006,5 +1007,48 @@ func TestReverse_IrreversibleRailRejected(t *testing.T) {
 	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
+	}
+}
+
+// ---- story 16: RTP rail ----
+
+func TestPost_RaastIsImmediateAndFinal(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Kind, x.Rail = domain.TransactionKindTopup, "raast"
+	got := f.post(t, x)
+
+	if got.Status != domain.TransactionStatusPosted || !strings.HasPrefix(got.RailRef, "RAAST-") {
+		t.Fatalf("%+v", got)
+	}
+	if b := f.balance(t, ali); b.Posted != 100 || b.PendingIn != 0 {
+		t.Fatalf("ali: %+v", b)
+	}
+
+	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: got.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailNotReversible) {
+		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
+	}
+}
+
+func TestPost_RTPRailRejectsWrongCurrency(t *testing.T) {
+	f := setup(t)
+	usdCash, err := f.accounts.CreateAccount(f.ctx, domain.Account{
+		OwnerType: domain.OwnerSystem, OwnerID: uuid.NewString(), Currency: "USD", Type: domain.AccountAsset,
+	})
+	must(t, err)
+	usdAli, err := f.accounts.CreateAccount(f.ctx, domain.Account{
+		OwnerType: domain.OwnerCustomer, OwnerID: uuid.NewString(), Currency: "USD", Type: domain.AccountLiability,
+	})
+	must(t, err)
+
+	x := transfer(usdCash.ID, usdAli.ID, 100, uuid.NewString())
+	x.Kind, x.Rail = domain.TransactionKindTopup, "raast"
+	_, _, err = f.ledger.Post(f.ctx, x)
+	if !errdefs.Is(err, domain.CodeRailFailed) {
+		t.Fatalf("want RAIL_FAILED, got %v", err)
 	}
 }
