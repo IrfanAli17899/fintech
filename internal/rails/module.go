@@ -18,5 +18,6 @@ func New(db *database.DB) api.RailRegistry {
 		adapters.NewRTPRail("raast", "PKR"),
 		adapters.NewRTPRail("sarie", "SAR"),
 		adapters.NewCardRail(attempts, 48*time.Hour),
+		adapters.NewSwiftRail(attempts, 72*time.Hour),
 	)
 }

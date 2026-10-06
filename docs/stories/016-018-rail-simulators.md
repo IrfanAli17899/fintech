@@ -22,7 +22,11 @@ exercised against instant, deferred-reversible, and deferred-bounceable money.
 
 ## 18 — SWIFT
 
-(fill in when done)
+- deferred (72h), never reversible, can bounce; amounts ending in 99 are
+  rejected at settlement so tests can drive the bounce path deterministically
+- Settle returns ErrBounced and moves the attempt to bounced; the ledger (19)
+  turns that into a void with a reason
+- pattern: correspondent banking and any rail where failure arrives late
 
 **Decisions**
 

@@ -17,6 +17,13 @@ import (
 
 func setup(t *testing.T) (*adapters.CardRail, *repositories.AttemptRepo) {
 	t.Helper()
+	db := connectTestDB(t)
+	repo := repositories.NewAttemptRepo(db.DB)
+	return adapters.NewCardRail(repo, 48*time.Hour), repo
+}
+
+func connectTestDB(t *testing.T) *database.DB {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://fintech:fintech@localhost:5432/fintech?sslmode=disable"
@@ -26,11 +33,10 @@ func setup(t *testing.T) (*adapters.CardRail, *repositories.AttemptRepo) {
 		t.Skipf("database not available: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	repo := repositories.NewAttemptRepo(db.DB)
-	return adapters.NewCardRail(repo, 48*time.Hour), repo
+	return db
 }
 
-func initiate(t *testing.T, c *adapters.CardRail) string {
+func initiateCard(t *testing.T, c *adapters.CardRail) string {
 	t.Helper()
 	res, err := c.Initiate(context.Background(), api.RailInitiateRequest{
 		TransactionID: uuid.New(), Amount: 1000, Currency: "PKR", Kind: "topup",
@@ -43,7 +49,7 @@ func initiate(t *testing.T, c *adapters.CardRail) string {
 
 func TestCard_InitiateIsDeferredAndRecorded(t *testing.T) {
 	c, repo := setup(t)
-	ref := initiate(t, c)
+	ref := initiateCard(t, c)
 
 	a, err := repo.Get(context.Background(), ref)
 	if err != nil {
@@ -56,7 +62,7 @@ func TestCard_InitiateIsDeferredAndRecorded(t *testing.T) {
 
 func TestCard_SettleOnce(t *testing.T) {
 	c, repo := setup(t)
-	ref := initiate(t, c)
+	ref := initiateCard(t, c)
 	ctx := context.Background()
 
 	if err := c.Settle(ctx, ref); err != nil {
@@ -73,7 +79,7 @@ func TestCard_SettleOnce(t *testing.T) {
 
 func TestCard_ReverseOnlyAfterSettle(t *testing.T) {
 	c, repo := setup(t)
-	ref := initiate(t, c)
+	ref := initiateCard(t, c)
 	ctx := context.Background()
 
 	if err := c.Reverse(ctx, ref, 1000); !errors.Is(err, domain.ErrWrongState) {
