@@ -1,4 +1,4 @@
-package internal
+package adapters
 
 import "github.com/irfanali17899/fintech/internal/ledger/api"
 

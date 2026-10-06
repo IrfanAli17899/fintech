@@ -30,22 +30,27 @@ type fixture struct {
 }
 
 func setup(t *testing.T) fixture {
-	return setupWith(t, rails.New())
+	t.Helper()
+	db := connectTestDB(t)
+	return setupWith(t, db, rails.New(db))
 }
 
-func setupWith(t *testing.T, reg api.RailRegistry) fixture {
+func connectTestDB(t *testing.T) *database.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://fintech:fintech@localhost:5432/fintech?sslmode=disable"
 	}
-	ctx := context.Background()
-	db, err := database.Connect(ctx, dsn)
+	db, err := database.Connect(context.Background(), dsn)
 	if err != nil {
 		t.Skipf("database not available: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	return db
+}
 
+func setupWith(t *testing.T, db *database.DB, reg api.RailRegistry) fixture {
+	t.Helper()
 	acc := repositories.NewAccountRepo(db.DB)
 	txn := repositories.NewTransactionRepo(db.DB)
 	ent := repositories.NewEntryRepo(db.DB)
@@ -53,7 +58,7 @@ func setupWith(t *testing.T, reg api.RailRegistry) fixture {
 	idem := repositories.NewIdempotencyRepo(db.DB)
 
 	return fixture{
-		ctx:      ctx,
+		ctx:      context.Background(),
 		ledger:   services.NewLedgerService(db, acc, txn, ent, bal, idem, reg),
 		accounts: services.NewAccountService(db, acc, bal),
 		admin:    services.NewAdminService(db, bal),
@@ -949,7 +954,7 @@ func TestPost_DeferredRailLandsPending(t *testing.T) {
 		props: api.RailProperties{SettlementDelay: 48 * time.Hour, CanBounce: true},
 		res:   api.RailInitiateResult{Ref: "prov-123", Settlement: api.SettlementDeferred},
 	}
-	f := setupWith(t, fakeRegistry{"internal": instantInternal, "fake": deferred})
+	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": deferred})
 	cash := f.account(t, domain.AccountAsset)
 	ali := f.account(t, domain.AccountLiability)
 
@@ -975,7 +980,7 @@ func TestPost_DeferredRailLandsPending(t *testing.T) {
 
 func TestPost_RailFailureRejects(t *testing.T) {
 	broken := fakeRail{name: "fake", err: errors.New("provider down")}
-	f := setupWith(t, fakeRegistry{"internal": instantInternal, "fake": broken})
+	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": broken})
 	cash := f.account(t, domain.AccountAsset)
 	ali := f.account(t, domain.AccountLiability)
 
@@ -996,7 +1001,7 @@ func TestReverse_IrreversibleRailRejected(t *testing.T) {
 		props: api.RailProperties{Instant: true, Reversible: false},
 		res:   api.RailInitiateResult{Ref: "r-1", Settlement: api.SettlementImmediate},
 	}
-	f := setupWith(t, fakeRegistry{"internal": instantInternal, "fake": oneWay})
+	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": oneWay})
 	cash := f.account(t, domain.AccountAsset)
 	ali := f.account(t, domain.AccountLiability)
 
@@ -1051,4 +1056,22 @@ func TestPost_RTPRailRejectsWrongCurrency(t *testing.T) {
 	if !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("want RAIL_FAILED, got %v", err)
 	}
+}
+
+func TestPost_CardTopupLandsPending(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 5000, uuid.NewString())
+	x.Kind, x.Rail = domain.TransactionKindTopup, "card"
+	got := f.post(t, x)
+
+	if got.Status != domain.TransactionStatusPending || !strings.HasPrefix(got.RailRef, "CARD-") || got.ExpiresAt == nil {
+		t.Fatalf("%+v", got)
+	}
+	if b := f.balance(t, ali); b.PendingIn != 5000 || b.Available != 0 {
+		t.Fatalf("ali: %+v", b)
+	}
+	f.verifyClean(t)
 }

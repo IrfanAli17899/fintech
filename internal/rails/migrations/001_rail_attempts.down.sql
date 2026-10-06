@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS rails.attempts;
+DROP TYPE IF EXISTS rails.attempt_state;
+DROP SCHEMA IF EXISTS rails CASCADE;

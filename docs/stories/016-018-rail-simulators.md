@@ -11,7 +11,14 @@ exercised against instant, deferred-reversible, and deferred-bounceable money.
 
 ## 17 — Card
 
-(fill in when done)
+- deferred (48h), reversible, no bounce; Initiate records an attempt in
+  rails.attempts and returns deferred, so the ledger posts a pending hold
+- Settle: initiated → settled; Reverse (chargeback): settled → reversed;
+  wrong-state transitions are refused
+- first rails-owned state: schema rails, own migrations and tracking table
+- known gap: Initiate writes on the pool, not the ledger's tx, so a rolled-back
+  post leaves an orphan attempt — exactly what a real provider would, and what
+  the reconciler (21) matches on
 
 ## 18 — SWIFT
 

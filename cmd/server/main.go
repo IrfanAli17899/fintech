@@ -31,9 +31,13 @@ func main() {
 	defer db.Close()
 
 	if err := ledger.Migrate(ctx, db.DB, dbURL); err != nil {
-		log.Fatalf("database migrations failed: %v", err)
+		log.Fatalf("ledger database migrations failed: %v", err)
 	}
-	ledgerMod := ledger.New(db, rails.New())
+	if err := rails.Migrate(ctx, db.DB, dbURL); err != nil {
+		log.Fatalf("rails database migrations failed: %v", err)
+	}
+
+	ledgerMod := ledger.New(db, rails.New(db))
 	if err := ledgerMod.Seed(ctx); err != nil {
 		log.Fatalf("seeding failed: %v", err)
 	}
