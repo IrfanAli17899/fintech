@@ -49,14 +49,15 @@ type entryResponse struct {
 }
 
 type transactionResponse struct {
-	ID        uuid.UUID       `json:"id"`
-	Kind      string          `json:"kind"`
-	Status    string          `json:"status"`
-	ParentID  *uuid.UUID      `json:"parent_id,omitempty"`
-	ExpiresAt *time.Time      `json:"expires_at,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	PostedAt  *time.Time      `json:"posted_at,omitempty"`
-	Entries   []entryResponse `json:"entries"`
+	ID           uuid.UUID       `json:"id"`
+	Kind         string          `json:"kind"`
+	Status       string          `json:"status"`
+	StatusReason *string         `json:"status_reason,omitempty"`
+	ParentID     *uuid.UUID      `json:"parent_id,omitempty"`
+	ExpiresAt    *time.Time      `json:"expires_at,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	PostedAt     *time.Time      `json:"posted_at,omitempty"`
+	Entries      []entryResponse `json:"entries"`
 }
 
 type reverseTransactionRequest struct {
@@ -87,14 +88,15 @@ func toTransactionResponse(t *domain.Transaction) *transactionResponse {
 		}
 	}
 	return &transactionResponse{
-		ID:        t.ID,
-		Kind:      string(t.Kind),
-		Status:    string(t.Status),
-		ParentID:  t.ParentID,
-		ExpiresAt: t.ExpiresAt,
-		CreatedAt: t.CreatedAt,
-		PostedAt:  t.PostedAt,
-		Entries:   entries,
+		ID:           t.ID,
+		Kind:         string(t.Kind),
+		Status:       string(t.Status),
+		StatusReason: t.StatusReason,
+		ParentID:     t.ParentID,
+		ExpiresAt:    t.ExpiresAt,
+		CreatedAt:    t.CreatedAt,
+		PostedAt:     t.PostedAt,
+		Entries:      entries,
 	}
 }
 

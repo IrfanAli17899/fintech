@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"time"
 
 	"github.com/irfanali17899/fintech/internal/ledger/api"
 )
@@ -28,6 +29,10 @@ type fakeRegistry map[string]api.Rail
 func (r fakeRegistry) Get(name string) (api.Rail, bool) {
 	x, ok := r[name]
 	return x, ok
+}
+
+func (r fakeRegistry) Due(context.Context, time.Time, int) ([]api.DueAttempt, error) {
+	return nil, nil
 }
 
 // instantInternal mirrors the real internal rail so tests using a fake

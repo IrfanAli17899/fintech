@@ -64,6 +64,7 @@ type Transaction struct {
 	Kind           TransactionKind
 	ParentID       *uuid.UUID
 	Status         TransactionStatus
+	StatusReason   *string
 	ExpiresAt      *time.Time
 	CreatedAt      time.Time
 	PostedAt       *time.Time
@@ -178,7 +179,7 @@ func (t Transaction) Validate() error {
 	return nil
 }
 
-func (t *Transaction) Hash() string {
+func (t Transaction) Hash() string {
 	legs := make([]string, len(t.Entries))
 	for i, e := range t.Entries {
 		legs[i] = fmt.Sprintf("%s|%s|%d", e.AccountID, e.Direction, e.Amount)

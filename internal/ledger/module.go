@@ -36,6 +36,7 @@ func New(db *database.DB, rails api.RailRegistry) *Module {
 		accounts: accSvc,
 		jobs: []*scheduler.Loop{
 			scheduler.New("expire-holds", time.Minute, ledgerSvc.ExpirerJob(500)),
+			scheduler.New("settlement", time.Minute, ledgerSvc.SettleJob(500)),
 		},
 		handlers: []interface{ RegisterRoutes(*http.ServeMux) }{
 			handlers.NewAccountHandler(accSvc),

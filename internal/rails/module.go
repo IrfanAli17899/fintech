@@ -14,6 +14,8 @@ func New(db *database.DB) api.RailRegistry {
 	attempts := repositories.NewAttemptRepo(db.DB)
 
 	return adapters.NewRegistry(
+		db,
+		attempts,
 		adapters.NullRail{},
 		adapters.NewRTPRail("raast", "PKR"),
 		adapters.NewRTPRail("sarie", "SAR"),

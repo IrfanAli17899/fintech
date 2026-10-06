@@ -53,17 +53,21 @@ func TestSwift_BouncesMagicAmount(t *testing.T) {
 	ref := initiateSwift(t, s, 1099)
 	ctx := context.Background()
 
-	err := s.Settle(ctx, ref)
-	if !errors.Is(err, domain.ErrBounced) {
-		t.Fatalf("want ErrBounced, got %v", err)
+	var bounce *api.RailBounce
+	if err := s.Settle(ctx, ref); !errors.As(err, &bounce) {
+		t.Fatalf("want RailBounce, got %v", err)
+	}
+	if bounce.Reason == "" {
+		t.Fatal("bounce carries no reason")
 	}
 	a, _ := repo.Get(ctx, ref)
 	if a.State != domain.AttemptBounced || a.Reason == nil {
 		t.Fatalf("%+v", a)
 	}
-	// a bounced attempt can't be settled afterwards
-	if err := s.Settle(ctx, ref); !errors.Is(err, domain.ErrWrongState) && !errors.Is(err, domain.ErrBounced) {
-		t.Fatalf("second settle: got %v", err)
+	// a bounced attempt can't be settled afterwards; the magic amount still
+	// routes to the bounce branch, which now fails the state transition
+	if err := s.Settle(ctx, ref); !errors.Is(err, domain.ErrWrongState) {
+		t.Fatalf("second settle: want ErrWrongState, got %v", err)
 	}
 }
 

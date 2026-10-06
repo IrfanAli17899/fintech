@@ -22,10 +22,10 @@ func NewTransactionRepo(db database.DBTX) *TransactionRepo {
 
 func (r *TransactionRepo) WithTx(tx *sql.Tx) *TransactionRepo { return &TransactionRepo{db: tx} }
 
-const transactionColumns = `id, kind, status, parent_id, rail, rail_ref, expires_at, created_at, posted_at`
+const transactionColumns = `id, kind, status, status_reason, parent_id, rail, rail_ref, expires_at, created_at, posted_at`
 
 func scanTransaction(row interface{ Scan(...any) error }, t *domain.Transaction) error {
-	return row.Scan(&t.ID, &t.Kind, &t.Status, &t.ParentID, &t.Rail, &t.RailRef, &t.ExpiresAt, &t.CreatedAt, &t.PostedAt)
+	return row.Scan(&t.ID, &t.Kind, &t.Status, &t.StatusReason, &t.ParentID, &t.Rail, &t.RailRef, &t.ExpiresAt, &t.CreatedAt, &t.PostedAt)
 }
 
 func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
@@ -98,9 +98,9 @@ func (r *TransactionRepo) ChildAmountsByAccount(ctx context.Context, parentID uu
 	return out, nil
 }
 
-func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID) error {
+func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID, reason *string) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE ledger.transactions SET status = 'voided' WHERE id = $1 AND status = 'pending'`, id)
+		`UPDATE ledger.transactions SET status = 'voided', status_reason = $2 WHERE id = $1 AND status = 'pending'`, id, reason)
 	if err != nil {
 		return errdefs.Internalf(err, "mark voided")
 	}
@@ -137,4 +137,27 @@ func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit
 		return nil, errdefs.Internalf(err, "expired holds rows")
 	}
 	return ids, nil
+}
+
+// ListByParent returns the direct children of a transaction, oldest first.
+func (r *TransactionRepo) ListByParent(ctx context.Context, parentID uuid.UUID) ([]domain.Transaction, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+transactionColumns+` FROM ledger.transactions WHERE parent_id = $1 ORDER BY created_at, id`, parentID)
+	if err != nil {
+		return nil, errdefs.Internalf(err, "list children")
+	}
+	defer rows.Close()
+
+	var out []domain.Transaction
+	for rows.Next() {
+		var t domain.Transaction
+		if err := scanTransaction(rows, &t); err != nil {
+			return nil, errdefs.Internalf(err, "scan child")
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "list children rows")
+	}
+	return out, nil
 }

@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"log"
 	"strconv"
 	"time"
 
@@ -22,6 +24,7 @@ type CaptureCommand struct {
 type VoidCommand struct {
 	HoldID         uuid.UUID
 	IdempotencyKey string
+	Reason         string
 }
 
 // ReverseCommand asks for a full (Amount == 0) or partial reversal of a posted transaction.
@@ -229,6 +232,8 @@ func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domai
 			Status:         domain.TransactionStatusPosted,
 			IdempotencyKey: cmd.IdempotencyKey,
 			ParentID:       &h.ID,
+			Rail:           h.Rail,
+			RailRef:        h.RailRef,
 			Entries:        h.Scaled(amount, capturedBy),
 		}
 		if err := child.Validate(); err != nil {
@@ -245,7 +250,7 @@ func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domai
 			return err
 		}
 		if captured+amount == held {
-			if err := r.txns.MarkVoided(ctx, h.ID); err != nil {
+			if err := r.txns.MarkVoided(ctx, h.ID, nil); err != nil {
 				return err
 			}
 		}
@@ -267,7 +272,7 @@ func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Tran
 	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
 		r := s.repos(tx)
 
-		hash := domain.HashOf("void", cmd.HoldID.String())
+		hash := domain.HashOf("void", cmd.HoldID.String(), cmd.Reason)
 		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
 		if err != nil {
 			return err
@@ -294,10 +299,16 @@ func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Tran
 				return err
 			}
 		}
-		if err := r.txns.MarkVoided(ctx, h.ID); err != nil {
+
+		var reason *string
+		if cmd.Reason != "" {
+			reason = &cmd.Reason
+		}
+		if err := r.txns.MarkVoided(ctx, h.ID, reason); err != nil {
 			return err
 		}
 		h.Status = domain.TransactionStatusVoided
+		h.StatusReason = reason
 		voided = h
 		return r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
 	})
@@ -305,6 +316,56 @@ func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Tran
 		return nil, false, err
 	}
 	return voided, replayed, nil
+}
+
+// SettleDue asks each rail with due attempts for an outcome and applies it:
+// settled → the pending transaction posts; bounced → it voids with the reason.
+// Rails that answer with any other error are left for the next run.
+func (s *LedgerService) SettleDue(ctx context.Context, now time.Time, batchSize int) (settled, bounced int, err error) {
+	due, err := s.rails.Due(ctx, now, batchSize)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	for _, d := range due {
+		rail, ok := s.rails.Get(d.Rail)
+		if !ok {
+			log.Printf("settle: unknown rail %q for %s", d.Rail, d.Ref)
+			continue
+		}
+
+		var bounce *api.RailBounce
+		switch err := rail.Settle(ctx, d.Ref); {
+		case err == nil:
+		case errors.As(err, &bounce):
+		default:
+			log.Printf("settle %s via %s: %v", d.Ref, d.Rail, err)
+			continue
+		}
+
+		if bounce != nil {
+			_, _, err = s.Bounce(ctx, d.TransactionID, bounce.Reason)
+		} else {
+			_, _, err = s.Settle(ctx, d.TransactionID)
+		}
+		switch {
+		case err == nil:
+			if bounce != nil {
+				bounced++
+			} else {
+				settled++
+			}
+		case errdefs.Is(err, domain.CodeTransactionNotPending):
+			// already resolved by expiry or a manual capture
+		case errdefs.Is(err, domain.CodeTransactionNotFound):
+			// the rail knows a transfer the ledger never committed: an orphan.
+			// Reconciliation (21) reports these; the worker moves on.
+			log.Printf("settle %s: orphan attempt, no ledger transaction %s", d.Ref, d.TransactionID)
+		default:
+			return settled, bounced, err
+		}
+	}
+	return settled, bounced, nil
 }
 
 // ExpireHolds voids every pending transaction past its expiry, in batches of
@@ -323,7 +384,7 @@ func (s *LedgerService) ExpireHolds(ctx context.Context, now time.Time, batchSiz
 
 	voided := 0
 	for _, id := range ids {
-		_, _, err := s.Void(ctx, VoidCommand{HoldID: id, IdempotencyKey: "expire:" + id.String()})
+		_, _, err := s.Void(ctx, VoidCommand{HoldID: id, IdempotencyKey: "expire:" + id.String(), Reason: "expired"})
 		switch {
 		case err == nil:
 			voided++
@@ -334,6 +395,26 @@ func (s *LedgerService) ExpireHolds(ctx context.Context, now time.Time, batchSiz
 		}
 	}
 	return voided, nil
+}
+
+// Settle posts everything a deferred transaction still holds, once its rail
+// has confirmed the funds. Idempotent on the transaction id.
+func (s *LedgerService) Settle(ctx context.Context, id uuid.UUID) (*domain.Transaction, bool, error) {
+	return s.Capture(ctx, CaptureCommand{HoldID: id, IdempotencyKey: "settle:" + id.String()})
+}
+
+// Bounce voids a deferred transaction whose rail rejected it before settlement.
+func (s *LedgerService) Bounce(ctx context.Context, id uuid.UUID, reason string) (*domain.Transaction, bool, error) {
+	return s.Void(ctx, VoidCommand{
+		HoldID:         id,
+		IdempotencyKey: "bounce:" + id.String(),
+		Reason:         "bounced: " + reason,
+	})
+}
+
+// Children returns the transactions that capture or reverse the given one.
+func (s *LedgerService) Children(ctx context.Context, parentID uuid.UUID) ([]domain.Transaction, error) {
+	return s.transactionRepo.ListByParent(ctx, parentID)
 }
 
 // ---- posting pipeline ----
@@ -410,6 +491,9 @@ func (s *LedgerService) resolveAccounts(ctx context.Context, r txRepos, t domain
 // initiateRail asks the transaction's rail to begin moving funds and lets the
 // rail's answer decide whether this posts now or stays pending.
 func (s *LedgerService) initiateRail(ctx context.Context, t *domain.Transaction, currency string) error {
+	if t.RailRef != "" {
+		return nil // settling an attempt the rail already knows; nothing to initiate
+	}
 	if t.Rail == "" {
 		t.Rail = domain.RailInternal
 	}

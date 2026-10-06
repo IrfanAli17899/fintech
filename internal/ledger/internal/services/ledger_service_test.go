@@ -1075,3 +1075,133 @@ func TestPost_CardTopupLandsPending(t *testing.T) {
 	}
 	f.verifyClean(t)
 }
+
+// ---- story 19: settlement ----
+
+func TestSettleDue_CardTopupPosts(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 5000, uuid.NewString())
+	x.Kind, x.Rail = domain.TransactionKindTopup, "card"
+	h := f.post(t, x)
+
+	// not due yet
+	_, _, err := f.ledger.SettleDue(f.ctx, time.Now(), 100)
+	must(t, err)
+	if got, _ := f.ledger.GetTransaction(f.ctx, h.ID); got.Status != domain.TransactionStatusPending {
+		t.Fatalf("settled early: %s", got.Status)
+	}
+
+	// three days later
+	_, _, err = f.ledger.SettleDue(f.ctx, time.Now().Add(72*time.Hour), 100)
+	must(t, err)
+
+	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if got.Status != domain.TransactionStatusVoided {
+		t.Fatalf("hold should be voided after full settle, got %s", got.Status)
+	}
+	b := f.balance(t, ali)
+	if b.Posted != 5000 || b.PendingIn != 0 || b.Available != 5000 {
+		t.Fatalf("ali: %+v", b)
+	}
+	f.verifyClean(t)
+}
+
+func TestSettleDue_SwiftBounceVoidsWithReason(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 1099, uuid.NewString()) // magic amount bounces
+	x.Kind, x.Rail = domain.TransactionKindTopup, "swift"
+	h := f.post(t, x)
+
+	_, bounced, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
+	must(t, err)
+	if bounced < 1 {
+		t.Fatal("expected at least one bounce")
+	}
+	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if got.Status != domain.TransactionStatusVoided || got.StatusReason == nil || !strings.HasPrefix(*got.StatusReason, "bounced:") {
+		t.Fatalf("%+v", got)
+	}
+	if b := f.balance(t, ali); b.PendingIn != 0 || b.Posted != 0 {
+		t.Fatalf("reservation not released: %+v", b)
+	}
+	f.verifyClean(t)
+}
+
+func TestSettleDue_SettledSwiftIsFinal(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 1000, uuid.NewString())
+	x.Kind, x.Rail = domain.TransactionKindTopup, "swift"
+	h := f.post(t, x)
+	_, _, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
+	must(t, err)
+
+	// the posted money is the capture child, not the hold
+	if b := f.balance(t, ali); b.Posted != 1000 {
+		t.Fatalf("ali: %+v", b)
+	}
+	// find the child and try to reverse it
+	// (needs a ListChildren repo method or a GetByParent — add the simplest:
+	//  TransactionRepo.ChildIDs(ctx, parentID) []uuid.UUID)
+	kids, err := f.ledger.Children(f.ctx, h.ID)
+	must(t, err)
+	if len(kids) != 1 {
+		t.Fatalf("children = %d", len(kids))
+	}
+	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: kids[0].ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailNotReversible) {
+		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
+	}
+}
+
+func TestSettleDue_ConcurrentWorkersSettleEachOnce(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	const n = 20
+	ids := make([]uuid.UUID, n)
+	for i := range ids {
+		w := f.account(t, domain.AccountLiability)
+		x := transfer(cash, w, 100, uuid.NewString())
+		x.Kind, x.Rail = domain.TransactionKindTopup, "card"
+		ids[i] = f.post(t, x).ID
+	}
+
+	later := time.Now().Add(72 * time.Hour)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				st, bo, err := f.ledger.SettleDue(f.ctx, later, 5)
+				if err != nil {
+					t.Errorf("settle: %v", err)
+					return
+				}
+				if st+bo == 0 {
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	for _, id := range ids {
+		got, err := f.ledger.GetTransaction(f.ctx, id)
+		must(t, err)
+		if got.Status != domain.TransactionStatusVoided {
+			t.Fatalf("hold %s not settled", id)
+		}
+	}
+	f.verifyClean(t)
+}

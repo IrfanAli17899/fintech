@@ -59,7 +59,7 @@ func (s *SwiftRail) Settle(ctx context.Context, ref string) error {
 		if !ok {
 			return fmt.Errorf("bounce %s: %w", ref, domain.ErrWrongState)
 		}
-		return fmt.Errorf("%w: %s", domain.ErrBounced, reason)
+		return &api.RailBounce{Reason: reason}
 	}
 	ok, err := s.attempts.Transition(ctx, ref, domain.AttemptInitiated, domain.AttemptSettled, nil)
 	if err != nil {
