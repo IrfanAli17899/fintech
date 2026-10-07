@@ -1,11 +1,20 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
+
+// product vocabulary used by these tests; the ledger itself has no opinion
+const (
+	kindTopup  TransactionKind = "topup"
+	kindRefund TransactionKind = "refund"
+)
+
+func ptr[T any](v T) *T { return &v }
 
 func entry(acc uuid.UUID, amt int64, dir EntryDirection) Entry {
 	return Entry{AccountID: acc, Amount: amt, Direction: dir}
@@ -13,7 +22,7 @@ func entry(acc uuid.UUID, amt int64, dir EntryDirection) Entry {
 
 func validTxn(a, b uuid.UUID) Transaction {
 	return Transaction{
-		Kind:           TransactionKindTopup,
+		Kind:           kindTopup,
 		Status:         TransactionStatusPosted,
 		IdempotencyKey: "k1",
 		Entries: []Entry{
@@ -33,9 +42,18 @@ func TestTransaction_Validate(t *testing.T) {
 	}{
 		{"valid posted", func(*Transaction) {}, ""},
 		{"valid pending", func(x *Transaction) { x.Status = TransactionStatusPending }, ""},
-		{"bad kind", func(x *Transaction) { x.Kind = "gift" }, CodeInvalidTransactionKind},
+		{"any product kind is valid", func(x *Transaction) { x.Kind = "pharmacy_sale" }, ""},
+		{"empty kind", func(x *Transaction) { x.Kind = "" }, CodeInvalidTransactionKind},
+		{"kind too long", func(x *Transaction) { x.Kind = TransactionKind(strings.Repeat("x", 65)) }, CodeInvalidTransactionKind},
 		{"empty status", func(x *Transaction) { x.Status = "" }, CodeInvalidTransactionStatus},
 		{"voided not allowed as input", func(x *Transaction) { x.Status = TransactionStatusVoided }, CodeInvalidTransactionStatus},
+		{"relation without parent", func(x *Transaction) { x.Relation = ptr(RelationReverses) }, CodeRelationWithoutParent},
+		{"bad relation", func(x *Transaction) {
+			x.ParentID, x.Relation = ptr(uuid.New()), ptr(TransactionRelation("owns"))
+		}, CodeInvalidRelation},
+		{"valid relation with parent", func(x *Transaction) {
+			x.ParentID, x.Relation = ptr(uuid.New()), ptr(RelationCaptures)
+		}, ""},
 		{"missing key", func(x *Transaction) { x.IdempotencyKey = "" }, CodeIdempotencyKeyRequired},
 		{"one entry", func(x *Transaction) { x.Entries = x.Entries[:1] }, CodeTooFewEntries},
 		{"bad direction", func(x *Transaction) { x.Entries[0].Direction = "up" }, CodeInvalidEntryDirection},
@@ -88,7 +106,7 @@ func TestTransaction_AccountIDs_SortedUnique(t *testing.T) {
 	}
 }
 
-func TestTransaction_RequestHash_OrderInsensitive(t *testing.T) {
+func TestTransaction_Hash_OrderInsensitive(t *testing.T) {
 	a, b := uuid.New(), uuid.New()
 	x := validTxn(a, b)
 	y := validTxn(a, b)
@@ -146,7 +164,6 @@ func TestTransaction_Reverse(t *testing.T) {
 
 	t.Run("partial scales and largest leg absorbs rounding", func(t *testing.T) {
 		got := byAccount(payment.Reverse(50, nil))
-		// 115*50/120 = 47, 5*50/120 = 2 → shortfall 1 → shop 48
 		if got[ali].Amount != 50 || got[shop].Amount != 48 || got[fees].Amount != 2 {
 			t.Fatalf("%+v", got)
 		}
@@ -162,7 +179,7 @@ func TestTransaction_Reverse(t *testing.T) {
 
 	t.Run("result is balanced", func(t *testing.T) {
 		for _, amt := range []int64{1, 7, 50, 119, 120} {
-			rev := Transaction{Kind: TransactionKindRefund, Status: TransactionStatusPosted,
+			rev := Transaction{Kind: kindRefund, Status: TransactionStatusPosted,
 				IdempotencyKey: "k", Entries: payment.Reverse(amt, nil)}
 			if err := rev.Validate(); err != nil {
 				t.Fatalf("reverse(%d) not valid: %v", amt, err)

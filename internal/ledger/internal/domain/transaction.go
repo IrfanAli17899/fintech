@@ -13,26 +13,19 @@ import (
 type TransactionKind string
 type TransactionStatus string
 type EntryDirection string
+type TransactionRelation string
 
 const (
-	TransactionKindTopup    TransactionKind = "topup"
-	TransactionKindTransfer TransactionKind = "transfer"
-	TransactionKindPayment  TransactionKind = "payment"
-	TransactionKindRefund   TransactionKind = "refund"
-	TransactionKindFee      TransactionKind = "fee"
-
 	TransactionStatusPending TransactionStatus = "pending"
 	TransactionStatusPosted  TransactionStatus = "posted"
 	TransactionStatusVoided  TransactionStatus = "voided"
 
 	EntryDirectionDebit  EntryDirection = "debit"
 	EntryDirectionCredit EntryDirection = "credit"
-)
 
-var validTransactionKinds = map[TransactionKind]bool{
-	TransactionKindFee: true, TransactionKindPayment: true, TransactionKindRefund: true,
-	TransactionKindTopup: true, TransactionKindTransfer: true,
-}
+	RelationCaptures TransactionRelation = "captures"
+	RelationReverses TransactionRelation = "reverses"
+)
 
 var validTransactionStatus = map[TransactionStatus]bool{
 	TransactionStatusPending: true, TransactionStatusPosted: true,
@@ -44,7 +37,6 @@ var validEntryDirection = map[EntryDirection]bool{
 }
 
 // MaxAmount caps a single entry at 1e15 minor units (10 trillion PKR).
-// Prevents int64 overflow when summing entries: ~9,200 max-size entries
 // would be needed to wrap, far beyond any realistic transaction.
 // each entry is capped at 10^5 and to overflow int64 you need at least
 // ~92K such entries which is not realistic
@@ -62,6 +54,7 @@ type Transaction struct {
 	ID             uuid.UUID
 	IdempotencyKey string
 	Kind           TransactionKind
+	Relation       *TransactionRelation
 	ParentID       *uuid.UUID
 	Status         TransactionStatus
 	StatusReason   *string
@@ -118,7 +111,7 @@ func (t Transaction) SumsByAccount() map[uuid.UUID]AccountSums {
 }
 
 func (k TransactionKind) Valid() bool {
-	return validTransactionKinds[k]
+	return k != "" && len(k) <= 64
 }
 
 func (s TransactionStatus) Valid() bool {
@@ -127,6 +120,10 @@ func (s TransactionStatus) Valid() bool {
 
 func (d EntryDirection) Valid() bool {
 	return validEntryDirection[d]
+}
+
+func (r TransactionRelation) Valid() bool {
+	return r == RelationCaptures || r == RelationReverses
 }
 
 func (t Transaction) Validate() error {
@@ -139,6 +136,10 @@ func (t Transaction) Validate() error {
 		return ErrTooFewEntries(len(t.Entries))
 	case t.Status != TransactionStatusPending && t.Status != TransactionStatusPosted:
 		return ErrInvalidTransactionStatus(t.Status)
+	case t.Relation != nil && !t.Relation.Valid():
+		return ErrInvalidRelation(*t.Relation)
+	case t.Relation != nil && t.ParentID == nil:
+		return ErrRelationWithoutParent(*t.Relation)
 	}
 
 	var debits, credits int64

@@ -18,3 +18,6 @@
   (superseded before story 13: renamed to parent_id once capture became the second relation)
 - GET loads transaction and entries in two indexed queries, not a join
 - net-zero check is hygiene, not security; authorization is a later layer
+- kind is product vocabulary, not ledger structure (superseded in 011: enum
+  replaced by free text; lineage carried by a ledger-owned `relation` flag,
+  matching TigerBeetle's code/flags split)

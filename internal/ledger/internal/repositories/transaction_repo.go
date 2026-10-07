@@ -22,10 +22,10 @@ func NewTransactionRepo(db database.DBTX) *TransactionRepo {
 
 func (r *TransactionRepo) WithTx(tx *sql.Tx) *TransactionRepo { return &TransactionRepo{db: tx} }
 
-const transactionColumns = `id, kind, status, status_reason, parent_id, rail, rail_ref, expires_at, created_at, posted_at`
+const transactionColumns = `id, kind, relation, status, status_reason, parent_id, rail, rail_ref, expires_at, created_at, posted_at`
 
 func scanTransaction(row interface{ Scan(...any) error }, t *domain.Transaction) error {
-	return row.Scan(&t.ID, &t.Kind, &t.Status, &t.StatusReason, &t.ParentID, &t.Rail, &t.RailRef, &t.ExpiresAt, &t.CreatedAt, &t.PostedAt)
+	return row.Scan(&t.ID, &t.Kind, &t.Relation, &t.Status, &t.StatusReason, &t.ParentID, &t.Rail, &t.RailRef, &t.ExpiresAt, &t.CreatedAt, &t.PostedAt)
 }
 
 func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*domain.Transaction, error) {
@@ -33,10 +33,10 @@ func (r *TransactionRepo) Create(ctx context.Context, t domain.Transaction) (*do
 		t.ID = uuid.Must(uuid.NewV7())
 	}
 	err := r.db.QueryRowContext(ctx,
-		`INSERT INTO ledger.transactions (id, kind, status, parent_id, rail, rail_ref, expires_at, posted_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $3::ledger.transaction_status = 'posted' THEN now() END)
-		 RETURNING created_at, posted_at`,
-		t.ID, t.Kind, t.Status, t.ParentID, t.Rail, t.RailRef, t.ExpiresAt,
+		`INSERT INTO ledger.transactions (id, kind, relation, status, parent_id, rail, rail_ref, expires_at, posted_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $4::ledger.transaction_status = 'posted' THEN now() END)
+		RETURNING created_at, posted_at`,
+		t.ID, t.Kind, t.Relation, t.Status, t.ParentID, t.Rail, t.RailRef, t.ExpiresAt,
 	).Scan(&t.CreatedAt, &t.PostedAt)
 	if err != nil {
 		return nil, errdefs.Internalf(err, "create transaction")
@@ -69,15 +69,15 @@ func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*do
 	return &t, nil
 }
 
-// ChildAmountsByAccount sums, per account, the posted children of parent that
-// have the given kind: refunds against a payment, or captures against a hold.
-func (r *TransactionRepo) ChildAmountsByAccount(ctx context.Context, parentID uuid.UUID, kind domain.TransactionKind) (map[uuid.UUID]int64, error) {
+// ChildAmountsByAccount sums, per account, the posted children of parent with
+// the given relation: reversals of a payment, or captures of a hold.
+func (r *TransactionRepo) ChildAmountsByAccount(ctx context.Context, parentID uuid.UUID, relation domain.TransactionRelation) (map[uuid.UUID]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.account_id, SUM(e.amount)
 		FROM ledger.transactions t
 		JOIN ledger.entries e ON e.transaction_id = t.id
-		WHERE t.parent_id = $1 AND t.kind = $2 AND t.status = 'posted'
-		GROUP BY e.account_id`, parentID, kind)
+		WHERE t.parent_id = $1 AND t.relation = $2 AND t.status = 'posted'
+		GROUP BY e.account_id`, parentID, relation)
 	if err != nil {
 		return nil, errdefs.Internalf(err, "child amounts by account")
 	}

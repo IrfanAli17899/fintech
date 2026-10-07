@@ -36,6 +36,8 @@ var (
 	CodeUnknownRail              = "UNKNOWN_RAIL"
 	CodeRailFailed               = "RAIL_FAILED"
 	CodeRailNotReversible        = "RAIL_NOT_REVERSIBLE"
+	CodeInvalidRelation          = "INVALID_RELATION"
+	CodeRelationWithoutParent    = "RELATION_WITHOUT_PARENT"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -181,4 +183,13 @@ func ErrIdempotencyKeyNotFound(key string) *errdefs.Error {
 func ErrIdempotencyKeyReused(key string) *errdefs.Error {
 	return errdefs.Validationf(CodeIdempotencyKeyReused,
 		"idempotency key %q was already used with a different request", key)
+}
+
+func ErrInvalidRelation(r TransactionRelation) *errdefs.Error {
+	return errdefs.Validationf(CodeInvalidRelation, "relation %q is not valid", r)
+}
+
+func ErrRelationWithoutParent(r TransactionRelation) *errdefs.Error {
+	return errdefs.Validationf(CodeRelationWithoutParent,
+		"relation %q requires a parent transaction", r)
 }

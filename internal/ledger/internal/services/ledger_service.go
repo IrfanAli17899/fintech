@@ -29,6 +29,7 @@ type VoidCommand struct {
 
 // ReverseCommand asks for a full (Amount == 0) or partial reversal of a posted transaction.
 type ReverseCommand struct {
+	Kind           string
 	OriginalID     uuid.UUID
 	Amount         int64
 	IdempotencyKey string
@@ -119,7 +120,7 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
 		r := s.repos(tx)
 
-		hash := domain.HashOf("reversal", cmd.OriginalID.String(), strconv.FormatInt(cmd.Amount, 10))
+		hash := domain.HashOf("reversal", cmd.OriginalID.String(), cmd.Kind, strconv.FormatInt(cmd.Amount, 10))
 		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
 		if err != nil {
 			return err
@@ -145,7 +146,7 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 			return err
 		}
 
-		reversedBy, err := r.txns.ChildAmountsByAccount(ctx, original.ID, domain.TransactionKindRefund)
+		reversedBy, err := r.txns.ChildAmountsByAccount(ctx, original.ID, domain.RelationReverses)
 		if err != nil {
 			return err
 		}
@@ -161,7 +162,8 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 		}
 
 		t := domain.Transaction{
-			Kind:           domain.TransactionKindRefund,
+			Kind:           domain.TransactionKind(cmd.Kind),
+			Relation:       ptr(domain.RelationReverses),
 			Status:         domain.TransactionStatusPosted,
 			IdempotencyKey: cmd.IdempotencyKey,
 			ParentID:       &original.ID,
@@ -211,7 +213,7 @@ func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domai
 		if err != nil {
 			return err
 		}
-		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, h.Kind)
+		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
 		if err != nil {
 			return err
 		}
@@ -229,6 +231,7 @@ func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domai
 
 		child := domain.Transaction{
 			Kind:           h.Kind,
+			Relation:       ptr(domain.RelationCaptures),
 			Status:         domain.TransactionStatusPosted,
 			IdempotencyKey: cmd.IdempotencyKey,
 			ParentID:       &h.ID,
@@ -287,7 +290,7 @@ func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Tran
 		if err != nil {
 			return err
 		}
-		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, h.Kind)
+		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
 		if err != nil {
 			return err
 		}
@@ -608,3 +611,5 @@ func pendingSums(t domain.Transaction) map[uuid.UUID]domain.AccountSums {
 	t.Status = domain.TransactionStatusPending
 	return t.SumsByAccount()
 }
+
+func ptr[T any](v T) *T { return &v }

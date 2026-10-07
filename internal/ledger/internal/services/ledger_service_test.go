@@ -20,6 +20,13 @@ import (
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
+const (
+	kindTopup    domain.TransactionKind = "topup"
+	kindTransfer domain.TransactionKind = "transfer"
+	kindPayment  domain.TransactionKind = "payment"
+	kindRefund   domain.TransactionKind = "refund"
+)
+
 // ---- fixture ----
 
 type fixture struct {
@@ -111,7 +118,7 @@ func (f fixture) verifyClean(t *testing.T) {
 
 func transfer(from, to uuid.UUID, amt int64, key string) domain.Transaction {
 	return domain.Transaction{
-		Kind:           domain.TransactionKindTransfer,
+		Kind:           kindTransfer,
 		IdempotencyKey: key,
 		Entries: []domain.Entry{
 			{AccountID: from, Amount: amt, Direction: domain.EntryDirectionDebit},
@@ -122,7 +129,7 @@ func transfer(from, to uuid.UUID, amt int64, key string) domain.Transaction {
 
 func hold(from, to uuid.UUID, amt int64, key string) domain.Transaction {
 	x := transfer(from, to, amt, key)
-	x.Kind = domain.TransactionKindPayment
+	x.Kind = kindPayment
 	x.Status = domain.TransactionStatusPending
 	return x
 }
@@ -352,7 +359,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 
 	f.post(t, transfer(cash, ali, 120, uuid.NewString()))
 	pay := f.post(t, domain.Transaction{
-		Kind: domain.TransactionKindPayment, IdempotencyKey: uuid.NewString(),
+		Kind: kindPayment, IdempotencyKey: uuid.NewString(),
 		Entries: []domain.Entry{
 			{AccountID: ali, Amount: 120, Direction: domain.EntryDirectionDebit},
 			{AccountID: shop, Amount: 115, Direction: domain.EntryDirectionCredit},
@@ -360,7 +367,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		},
 	})
 
-	r1, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: pay.ID, Amount: 50, IdempotencyKey: uuid.NewString()})
+	r1, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 50, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if r1.ParentID == nil || *r1.ParentID != pay.ID {
 		t.Fatal("reversal not linked to original")
@@ -369,7 +376,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		t.Fatalf("shop after partial = %d, want 67", b.Posted)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: pay.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	orig, err := f.ledger.GetTransaction(f.ctx, pay.ID)
@@ -384,7 +391,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		t.Fatalf("shop should be back to 0, got %d", b.Posted)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: pay.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
@@ -399,7 +406,7 @@ func TestReverse_ExceedsOriginal(t *testing.T) {
 	f.post(t, transfer(cash, ali, 100, uuid.NewString()))
 	pay := f.post(t, transfer(ali, sara, 100, uuid.NewString()))
 
-	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: pay.ID, Amount: 101, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 101, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
@@ -422,7 +429,7 @@ func TestReverse_ConcurrentPartialsCannotExceed(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: pay.ID, Amount: 70, IdempotencyKey: uuid.NewString()})
+			_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 70, IdempotencyKey: uuid.NewString()})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -450,7 +457,7 @@ func TestPost_PendingDoesNotMoveMoney(t *testing.T) {
 
 	got := f.post(t, func() domain.Transaction {
 		x := transfer(cash, ali, 5000, uuid.NewString())
-		x.Kind, x.Status = domain.TransactionKindTopup, domain.TransactionStatusPending
+		x.Kind, x.Status = kindTopup, domain.TransactionStatusPending
 		return x
 	}())
 	if got.Status != domain.TransactionStatusPending || got.PostedAt != nil {
@@ -959,7 +966,7 @@ func TestPost_DeferredRailLandsPending(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 
 	x := transfer(cash, ali, 100, uuid.NewString())
-	x.Kind, x.Rail = domain.TransactionKindTopup, "fake"
+	x.Kind, x.Rail = kindTopup, "fake"
 	got := f.post(t, x)
 
 	if got.Status != domain.TransactionStatusPending || got.RailRef != "prov-123" {
@@ -1006,10 +1013,10 @@ func TestReverse_IrreversibleRailRejected(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 
 	x := transfer(cash, ali, 100, uuid.NewString())
-	x.Kind, x.Rail = domain.TransactionKindTopup, "fake"
+	x.Kind, x.Rail = kindTopup, "fake"
 	posted := f.post(t, x)
 
-	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1023,7 +1030,7 @@ func TestPost_RaastIsImmediateAndFinal(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 
 	x := transfer(cash, ali, 100, uuid.NewString())
-	x.Kind, x.Rail = domain.TransactionKindTopup, "raast"
+	x.Kind, x.Rail = kindTopup, "raast"
 	got := f.post(t, x)
 
 	if got.Status != domain.TransactionStatusPosted || !strings.HasPrefix(got.RailRef, "RAAST-") {
@@ -1033,7 +1040,7 @@ func TestPost_RaastIsImmediateAndFinal(t *testing.T) {
 		t.Fatalf("ali: %+v", b)
 	}
 
-	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: got.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: got.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1051,7 +1058,7 @@ func TestPost_RTPRailRejectsWrongCurrency(t *testing.T) {
 	must(t, err)
 
 	x := transfer(usdCash.ID, usdAli.ID, 100, uuid.NewString())
-	x.Kind, x.Rail = domain.TransactionKindTopup, "raast"
+	x.Kind, x.Rail = kindTopup, "raast"
 	_, _, err = f.ledger.Post(f.ctx, x)
 	if !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("want RAIL_FAILED, got %v", err)
@@ -1064,7 +1071,7 @@ func TestPost_CardTopupLandsPending(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 
 	x := transfer(cash, ali, 5000, uuid.NewString())
-	x.Kind, x.Rail = domain.TransactionKindTopup, "card"
+	x.Kind, x.Rail = kindTopup, "card"
 	got := f.post(t, x)
 
 	if got.Status != domain.TransactionStatusPending || !strings.HasPrefix(got.RailRef, "CARD-") || got.ExpiresAt == nil {
@@ -1084,7 +1091,7 @@ func TestSettleDue_CardTopupPosts(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 
 	x := transfer(cash, ali, 5000, uuid.NewString())
-	x.Kind, x.Rail = domain.TransactionKindTopup, "card"
+	x.Kind, x.Rail = kindTopup, "card"
 	h := f.post(t, x)
 
 	// not due yet
@@ -1116,7 +1123,7 @@ func TestSettleDue_SwiftBounceVoidsWithReason(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 
 	x := transfer(cash, ali, 1099, uuid.NewString()) // magic amount bounces
-	x.Kind, x.Rail = domain.TransactionKindTopup, "swift"
+	x.Kind, x.Rail = kindTopup, "swift"
 	h := f.post(t, x)
 
 	_, bounced, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
@@ -1141,7 +1148,7 @@ func TestSettleDue_SettledSwiftIsFinal(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 
 	x := transfer(cash, ali, 1000, uuid.NewString())
-	x.Kind, x.Rail = domain.TransactionKindTopup, "swift"
+	x.Kind, x.Rail = kindTopup, "swift"
 	h := f.post(t, x)
 	_, _, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
 	must(t, err)
@@ -1150,15 +1157,13 @@ func TestSettleDue_SettledSwiftIsFinal(t *testing.T) {
 	if b := f.balance(t, ali); b.Posted != 1000 {
 		t.Fatalf("ali: %+v", b)
 	}
-	// find the child and try to reverse it
-	// (needs a ListChildren repo method or a GetByParent — add the simplest:
-	//  TransactionRepo.ChildIDs(ctx, parentID) []uuid.UUID)
+	// the posted money is the capture child; it inherited the swift rail
 	kids, err := f.ledger.Children(f.ctx, h.ID)
 	must(t, err)
 	if len(kids) != 1 {
 		t.Fatalf("children = %d", len(kids))
 	}
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{OriginalID: kids[0].ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: kids[0].ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1172,7 +1177,7 @@ func TestSettleDue_ConcurrentWorkersSettleEachOnce(t *testing.T) {
 	for i := range ids {
 		w := f.account(t, domain.AccountLiability)
 		x := transfer(cash, w, 100, uuid.NewString())
-		x.Kind, x.Rail = domain.TransactionKindTopup, "card"
+		x.Kind, x.Rail = kindTopup, "card"
 		ids[i] = f.post(t, x).ID
 	}
 
@@ -1204,4 +1209,41 @@ func TestSettleDue_ConcurrentWorkersSettleEachOnce(t *testing.T) {
 		}
 	}
 	f.verifyClean(t)
+}
+
+// ---- story 11b: kind is product-owned ----
+
+func TestPost_KindIsProductOwned(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Kind = "pharmacy_sale"
+	if got := f.post(t, x); got.Kind != "pharmacy_sale" {
+		t.Fatalf("kind = %s, want pharmacy_sale", got.Kind)
+	}
+
+	x = transfer(cash, ali, 100, uuid.NewString())
+	x.Kind = ""
+	if _, _, err := f.ledger.Post(f.ctx, x); !errdefs.Is(err, domain.CodeInvalidTransactionKind) {
+		t.Fatalf("want INVALID_TRANSACTION_KIND, got %v", err)
+	}
+}
+
+func TestReverse_ChildCarriesCallerKindAndRelation(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	sara := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 100, uuid.NewString()))
+	pay := f.post(t, transfer(ali, sara, 100, uuid.NewString()))
+
+	rev, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{
+		Kind: "pharmacy_return", OriginalID: pay.ID, IdempotencyKey: uuid.NewString(),
+	})
+	must(t, err)
+	if rev.Kind != "pharmacy_return" || rev.Relation == nil || *rev.Relation != domain.RelationReverses {
+		t.Fatalf("%+v", rev)
+	}
 }
