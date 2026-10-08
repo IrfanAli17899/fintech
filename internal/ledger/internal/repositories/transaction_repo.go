@@ -110,13 +110,14 @@ func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID, reason *
 	return nil
 }
 
-// ExpiredHolds returns ids of pending transactions whose expiry has passed, at
-// most limit, skipping rows another worker already holds. Only meaningful
-// inside a transaction; the lock lasts until that transaction ends.
+// ExpiredHolds returns ids of internal pending transactions whose expiry has
+// passed, at most limit, skipping rows another worker already holds. Rail-backed
+// holds are resolved by their rail, never by the clock. Only meaningful inside
+// a transaction; the lock lasts until that transaction ends.
 func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id FROM ledger.transactions
-		WHERE status = 'pending' AND expires_at <= $1
+		WHERE status = 'pending' AND expires_at <= $1 AND rail IN ('', 'internal')
 		ORDER BY expires_at
 		LIMIT $2
 		FOR UPDATE SKIP LOCKED`, now, limit)

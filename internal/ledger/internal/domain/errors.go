@@ -36,6 +36,8 @@ var (
 	CodeUnknownRail              = "UNKNOWN_RAIL"
 	CodeRailFailed               = "RAIL_FAILED"
 	CodeRailNotReversible        = "RAIL_NOT_REVERSIBLE"
+		CodeRailManagedHold          = "RAIL_MANAGED_HOLD"
+		CodeRailPartialRefund        = "RAIL_PARTIAL_REFUND_UNSUPPORTED"
 	CodeInvalidRelation          = "INVALID_RELATION"
 	CodeRelationWithoutParent    = "RELATION_WITHOUT_PARENT"
 
@@ -158,8 +160,8 @@ func ErrUnknownRail(name string) *errdefs.Error {
 	return errdefs.Validationf(CodeUnknownRail, "rail %q is not available", name)
 }
 
-func ErrRailFailed(name string, cause error) *errdefs.Error {
-	e := errdefs.Internalf(cause, "rail %s failed to initiate", name)
+func ErrRailFailed(name, op string, cause error) *errdefs.Error {
+	e := errdefs.Internalf(cause, "rail %s failed to %s", name, op)
 	e.Code = CodeRailFailed
 	return e
 }
@@ -167,6 +169,16 @@ func ErrRailFailed(name string, cause error) *errdefs.Error {
 func ErrRailNotReversible(id uuid.UUID, rail string) *errdefs.Error {
 	return errdefs.Validationf(CodeRailNotReversible,
 		"transaction %s was sent via %s, which does not support reversal", id, rail)
+}
+
+func ErrRailManagedHold(id uuid.UUID, rail string) *errdefs.Error {
+	return errdefs.Validationf(CodeRailManagedHold,
+		"transaction %s is held by %s; only the rail can settle or cancel it", id, rail)
+}
+
+func ErrRailPartialRefund(id uuid.UUID, rail string) *errdefs.Error {
+	return errdefs.Validationf(CodeRailPartialRefund,
+		"transaction %s was sent via %s; only a full reversal is supported", id, rail)
 }
 
 // Internal signal from the repo that the key already exists; the service

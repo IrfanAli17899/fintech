@@ -7,12 +7,14 @@ import (
 	"github.com/irfanali17899/fintech/internal/ledger/api"
 )
 
-// fakeRail returns a canned Initiate result; Settle and Reverse are no-ops.
+// fakeRail returns a canned Initiate result; Settle is a no-op and Reverse
+// returns revErr.
 type fakeRail struct {
-	name  string
-	props api.RailProperties
-	res   api.RailInitiateResult
-	err   error
+	name   string
+	props  api.RailProperties
+	res    api.RailInitiateResult
+	err    error
+	revErr error
 }
 
 func (f fakeRail) Name() string                   { return f.name }
@@ -21,7 +23,7 @@ func (f fakeRail) Initiate(context.Context, api.RailInitiateRequest) (api.RailIn
 	return f.res, f.err
 }
 func (fakeRail) Settle(context.Context, string) error         { return nil }
-func (fakeRail) Reverse(context.Context, string, int64) error { return nil }
+func (f fakeRail) Reverse(context.Context, string, int64) error { return f.revErr }
 
 // fakeRegistry is a map that satisfies api.RailRegistry.
 type fakeRegistry map[string]api.Rail

@@ -46,7 +46,14 @@ func main() {
 
 	mux := http.NewServeMux()
 	ledgerMod.RegisterRoutes(mux)
-	server := &http.Server{Addr: ":4000", Handler: mux}
+	server := &http.Server{
+		Addr:              ":4000",
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	go func() {
 		log.Println("listening on :4000")

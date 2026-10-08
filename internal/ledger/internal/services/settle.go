@@ -10,12 +10,12 @@ import (
 func (s *LedgerService) SettleJob(batchSize int) func(context.Context) {
 	return func(ctx context.Context) {
 		for {
-			st, bo, err := s.SettleDue(ctx, time.Now(), batchSize)
+			st, bo, dv, err := s.SettleDue(ctx, time.Now(), batchSize)
 			if err != nil {
 				log.Printf("settle due: %v", err)
 				return
 			}
-			if st+bo < batchSize {
+			if st+bo+dv < batchSize {
 				return
 			}
 		}

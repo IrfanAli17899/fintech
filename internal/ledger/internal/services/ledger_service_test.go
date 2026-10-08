@@ -1095,14 +1095,14 @@ func TestSettleDue_CardTopupPosts(t *testing.T) {
 	h := f.post(t, x)
 
 	// not due yet
-	_, _, err := f.ledger.SettleDue(f.ctx, time.Now(), 100)
+	_, _, _, err := f.ledger.SettleDue(f.ctx, time.Now(), 100)
 	must(t, err)
 	if got, _ := f.ledger.GetTransaction(f.ctx, h.ID); got.Status != domain.TransactionStatusPending {
 		t.Fatalf("settled early: %s", got.Status)
 	}
 
 	// three days later
-	_, _, err = f.ledger.SettleDue(f.ctx, time.Now().Add(72*time.Hour), 100)
+	_, _, _, err = f.ledger.SettleDue(f.ctx, time.Now().Add(72*time.Hour), 100)
 	must(t, err)
 
 	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
@@ -1126,7 +1126,7 @@ func TestSettleDue_SwiftBounceVoidsWithReason(t *testing.T) {
 	x.Kind, x.Rail = kindTopup, "swift"
 	h := f.post(t, x)
 
-	_, bounced, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
+	_, bounced, _, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
 	must(t, err)
 	if bounced < 1 {
 		t.Fatal("expected at least one bounce")
@@ -1150,7 +1150,7 @@ func TestSettleDue_SettledSwiftIsFinal(t *testing.T) {
 	x := transfer(cash, ali, 1000, uuid.NewString())
 	x.Kind, x.Rail = kindTopup, "swift"
 	h := f.post(t, x)
-	_, _, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
+	_, _, _, err := f.ledger.SettleDue(f.ctx, time.Now().Add(96*time.Hour), 100)
 	must(t, err)
 
 	// the posted money is the capture child, not the hold
@@ -1188,7 +1188,7 @@ func TestSettleDue_ConcurrentWorkersSettleEachOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				st, bo, err := f.ledger.SettleDue(f.ctx, later, 5)
+				st, bo, _, err := f.ledger.SettleDue(f.ctx, later, 5)
 				if err != nil {
 					t.Errorf("settle: %v", err)
 					return
@@ -1207,6 +1207,107 @@ func TestSettleDue_ConcurrentWorkersSettleEachOnce(t *testing.T) {
 		if got.Status != domain.TransactionStatusVoided {
 			t.Fatalf("hold %s not settled", id)
 		}
+	}
+	f.verifyClean(t)
+}
+
+// ---- rail consistency guards ----
+
+func TestPost_RejectedPostNeverReachesRail(t *testing.T) {
+	broken := fakeRail{name: "fake", err: errors.New("rail must not be called")}
+	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": broken})
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+
+	x := transfer(ali, shop, 100, uuid.NewString())
+	x.Rail = "fake"
+	_, _, err := f.ledger.Post(f.ctx, x)
+	if !errdefs.Is(err, domain.CodeInsufficientFunds) {
+		t.Fatalf("want INSUFFICIENT_FUNDS before the rail is asked, got %v", err)
+	}
+}
+
+func cardHold(t *testing.T, f fixture) *domain.Transaction {
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	x := transfer(cash, ali, 5000, uuid.NewString())
+	x.Kind, x.Rail = kindTopup, "card"
+	return f.post(t, x)
+}
+
+func TestVoidAndCapture_RailManagedHoldRejected(t *testing.T) {
+	f := setup(t)
+	h := cardHold(t, f)
+
+	_, _, err := f.ledger.Void(f.ctx, services.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailManagedHold) {
+		t.Fatalf("void: want RAIL_MANAGED_HOLD, got %v", err)
+	}
+	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailManagedHold) {
+		t.Fatalf("capture: want RAIL_MANAGED_HOLD, got %v", err)
+	}
+}
+
+func TestExpireHolds_LeavesRailBackedAlone(t *testing.T) {
+	f := setup(t)
+	h := cardHold(t, f)
+
+	_, err := f.ledger.ExpireHolds(f.ctx, h.ExpiresAt.Add(time.Minute), 1000)
+	must(t, err)
+	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if got.Status != domain.TransactionStatusPending {
+		t.Fatalf("rail-backed hold expired by the clock: %s", got.Status)
+	}
+}
+
+func TestReverse_CardRefundIsFullOnlyAndCarriesRail(t *testing.T) {
+	f := setup(t)
+	h := cardHold(t, f)
+	_, _, _, err := f.ledger.SettleDue(f.ctx, time.Now().Add(72*time.Hour), 1000)
+	must(t, err)
+	kids, err := f.ledger.Children(f.ctx, h.ID)
+	must(t, err)
+	if len(kids) != 1 {
+		t.Fatalf("children = %d", len(kids))
+	}
+	posted := kids[0]
+
+	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, Amount: 1000, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailPartialRefund) {
+		t.Fatalf("want RAIL_PARTIAL_REFUND_UNSUPPORTED, got %v", err)
+	}
+
+	refund, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if refund.Rail != "card" || refund.RailRef != posted.RailRef {
+		t.Fatalf("refund must be a card refund on the same ref: %+v", refund)
+	}
+	f.verifyClean(t)
+}
+
+func TestReverse_RailRefusalRollsBack(t *testing.T) {
+	refusing := fakeRail{
+		name:   "fake",
+		props:  api.RailProperties{Instant: true, Reversible: true},
+		res:    api.RailInitiateResult{Ref: "r-1", Settlement: api.SettlementImmediate},
+		revErr: errors.New("provider refused"),
+	}
+	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": refusing})
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Kind, x.Rail = kindTopup, "fake"
+	posted := f.post(t, x)
+
+	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailFailed) {
+		t.Fatalf("want RAIL_FAILED, got %v", err)
+	}
+	if b := f.balance(t, ali); b.Posted != 100 {
+		t.Fatalf("refund must roll back when the rail refuses: %+v", b)
 	}
 	f.verifyClean(t)
 }

@@ -77,6 +77,12 @@ type Entry struct {
 	CreatedAt     time.Time
 }
 
+// RailBacked reports whether money in t moved through an external rail, which
+// then owns its settlement, cancellation and refunds.
+func (t Transaction) RailBacked() bool {
+	return t.Rail != "" && t.Rail != RailInternal
+}
+
 func SortIDs(ids []uuid.UUID) {
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
 }
