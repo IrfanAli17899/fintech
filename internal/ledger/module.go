@@ -27,7 +27,7 @@ func New(db *database.DB, rails api.RailRegistry) *Module {
 	balanceRepo := repositories.NewBalanceRepo(db)
 	idemRepo := repositories.NewIdempotencyRepo(db)
 
-	accSvc := services.NewAccountService(db, accRepo, balanceRepo)
+	accSvc := services.NewAccountService(db, accRepo, balanceRepo, entryRepo)
 	ledgerSvc := services.NewLedgerService(db, accRepo, txnRepo, entryRepo, balanceRepo, idemRepo, rails)
 	adminSvc := services.NewAdminService(db, balanceRepo)
 

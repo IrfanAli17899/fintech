@@ -5,12 +5,35 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
 type listAccountsQuery struct {
 	OwnerType string `query:"owner_type"`
 	OwnerID   string `query:"owner_id"`
+}
+
+type historyQuery struct {
+	Limit  int   `query:"limit"`
+	Before int64 `query:"before"`
+}
+
+type accountEntryResponse struct {
+	Seq           int64      `json:"seq"`
+	Amount        int64      `json:"amount"`
+	Direction     string     `json:"direction"`
+	CreatedAt     time.Time  `json:"created_at"`
+	TransactionID uuid.UUID  `json:"transaction_id"`
+	Kind          string     `json:"kind"`
+	Status        string     `json:"status"`
+	Rail          string     `json:"rail"`
+	ParentID      *uuid.UUID `json:"parent_id,omitempty"`
+}
+
+type historyResponse struct {
+	Entries    []accountEntryResponse `json:"entries"`
+	NextBefore int64                  `json:"next_before"`
 }
 
 func (q listAccountsQuery) Validate() error {
@@ -90,4 +113,19 @@ func toBalanceResponse(b *domain.Balance) *balanceResponse {
 		Available:  b.Available,
 		AsOf:       b.AsOf,
 	}
+}
+
+func toHistoryResponse(h *services.History) *historyResponse {
+	if h == nil {
+		return nil
+	}
+	out := make([]accountEntryResponse, len(h.Entries))
+	for i, e := range h.Entries {
+		out[i] = accountEntryResponse{
+			Seq: e.Seq, Amount: e.Amount, Direction: string(e.Direction), CreatedAt: e.CreatedAt,
+			TransactionID: e.TransactionID, Kind: string(e.Kind), Status: string(e.Status),
+			Rail: e.Rail, ParentID: e.ParentID,
+		}
+	}
+	return &historyResponse{Entries: out, NextBefore: h.NextBefore}
 }

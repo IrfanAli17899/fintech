@@ -67,7 +67,7 @@ func setupWith(t *testing.T, db *database.DB, reg api.RailRegistry) fixture {
 	return fixture{
 		ctx:      context.Background(),
 		ledger:   services.NewLedgerService(db, acc, txn, ent, bal, idem, reg),
-		accounts: services.NewAccountService(db, acc, bal),
+		accounts: services.NewAccountService(db, acc, bal, ent),
 		admin:    services.NewAdminService(db, bal),
 	}
 }
@@ -1245,5 +1245,83 @@ func TestReverse_ChildCarriesCallerKindAndRelation(t *testing.T) {
 	must(t, err)
 	if rev.Kind != "pharmacy_return" || rev.Relation == nil || *rev.Relation != domain.RelationReverses {
 		t.Fatalf("%+v", rev)
+	}
+}
+
+// ---- story 20: summaries and history ----
+
+func TestSummary_TracksCapturesAndReversals(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+	if h.Summary.Total != 500 || h.Summary.Remaining != 500 {
+		t.Fatalf("fresh summary: %+v", h.Summary)
+	}
+
+	cap, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if got.Summary.Captured != 300 || got.Summary.Remaining != 200 {
+		t.Fatalf("after capture: %+v", got.Summary)
+	}
+
+	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: cap.ID, Amount: 100, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	capNow, err := f.ledger.GetTransaction(f.ctx, cap.ID)
+	must(t, err)
+	if capNow.Summary.Total != 300 || capNow.Summary.Reversed != 100 || capNow.Summary.Remaining != 200 {
+		t.Fatalf("capture after partial refund: %+v", capNow.Summary)
+	}
+}
+
+func TestHistory_PagesNewestFirst(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	for i := 0; i < 7; i++ {
+		f.post(t, transfer(cash, ali, int64(100+i), uuid.NewString()))
+	}
+
+	var seen []int64
+	var before int64
+	pages := 0
+	for {
+		h, err := f.accounts.History(f.ctx, ali, before, 3)
+		must(t, err)
+		pages++
+		for _, e := range h.Entries {
+			seen = append(seen, e.Seq)
+		}
+		if h.NextBefore == 0 {
+			break
+		}
+		before = h.NextBefore
+	}
+
+	if pages != 3 || len(seen) != 7 {
+		t.Fatalf("pages=%d entries=%d", pages, len(seen))
+	}
+	for i := 1; i < len(seen); i++ {
+		if seen[i] >= seen[i-1] {
+			t.Fatalf("not strictly descending at %d: %v", i, seen)
+		}
+	}
+	h, err := f.accounts.History(f.ctx, ali, 0, 1)
+	must(t, err)
+	if h.Entries[0].Amount != 106 || h.Entries[0].Direction != domain.EntryDirectionCredit {
+		t.Fatalf("newest entry: %+v", h.Entries[0])
+	}
+}
+
+func TestHistory_UnknownAccount(t *testing.T) {
+	f := setup(t)
+	_, err := f.accounts.History(f.ctx, uuid.New(), 0, 10)
+	if !errdefs.Is(err, domain.CodeAccountNotFound) {
+		t.Fatalf("want ACCOUNT_NOT_FOUND, got %v", err)
 	}
 }

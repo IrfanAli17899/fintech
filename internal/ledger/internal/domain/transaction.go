@@ -62,6 +62,7 @@ type Transaction struct {
 	CreatedAt      time.Time
 	PostedAt       *time.Time
 	Entries        []Entry
+	Summary        TransactionSummary
 
 	Rail    string // empty = internal
 	RailRef string // provider reference set by the rail

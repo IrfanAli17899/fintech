@@ -560,6 +560,7 @@ func (s *LedgerService) write(ctx context.Context, r txRepos, t domain.Transacti
 			return nil, err
 		}
 	}
+	created.Summary = domain.TransactionSummary{Total: created.Total(), Remaining: created.Total()}
 	return created, nil
 }
 
@@ -569,8 +570,13 @@ func (s *LedgerService) loadTransaction(ctx context.Context, txns *repositories.
 	if err != nil {
 		return nil, err
 	}
-	t.Entries, err = ents.ListByTransaction(ctx, id)
-	return t, err
+	if t.Entries, err = ents.ListByTransaction(ctx, id); err != nil {
+		return nil, err
+	}
+	if t.Summary, err = txns.Summary(ctx, id); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 func (s *LedgerService) releaseReservation(ctx context.Context, r txRepos, sums map[uuid.UUID]domain.AccountSums) error {

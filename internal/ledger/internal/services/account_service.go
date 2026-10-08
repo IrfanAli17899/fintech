@@ -11,18 +11,30 @@ import (
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 
+const (
+	historyDefaultLimit = 50
+	historyMaxLimit     = 100
+)
+
+type History struct {
+	Entries    []domain.AccountEntry
+	NextBefore int64 // 0 when there is no further page
+}
+
 type AccountService struct {
 	txRunner    database.TxRunner
 	accRepo     *repositories.AccountRepo
 	balanceRepo *repositories.BalanceRepo
+	entryRepo   *repositories.EntryRepo
 }
 
 func NewAccountService(
 	txRunner database.TxRunner,
 	accRepo *repositories.AccountRepo,
 	balanceRepo *repositories.BalanceRepo,
+	entryRepo *repositories.EntryRepo,
 ) *AccountService {
-	return &AccountService{txRunner, accRepo, balanceRepo}
+	return &AccountService{txRunner, accRepo, balanceRepo, entryRepo}
 }
 
 func (s *AccountService) CreateAccount(ctx context.Context, a domain.Account) (*domain.Account, error) {
@@ -99,4 +111,26 @@ func (s *AccountService) SeedSystem(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+// History returns an account's statement newest first, cursor-paginated on entry seq.
+func (s *AccountService) History(ctx context.Context, accountID uuid.UUID, beforeSeq int64, limit int) (*History, error) {
+	if _, err := s.accRepo.GetByID(ctx, accountID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = historyDefaultLimit
+	}
+	if limit > historyMaxLimit {
+		limit = historyMaxLimit
+	}
+	entries, err := s.entryRepo.ListByAccount(ctx, accountID, beforeSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	h := &History{Entries: entries}
+	if len(entries) == limit {
+		h.NextBefore = entries[len(entries)-1].Seq
+	}
+	return h, nil
 }

@@ -21,6 +21,7 @@ func (h *AccountHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /accounts", h.ListAccounts)
 	mux.HandleFunc("GET /accounts/{id}", h.GetAccount)
 	mux.HandleFunc("GET /accounts/{id}/balance", h.GetAccountBalance)
+	mux.HandleFunc("GET /accounts/{id}/transactions", h.History)
 
 }
 
@@ -67,4 +68,19 @@ func (h *AccountHandler) GetAccountBalance(w http.ResponseWriter, r *http.Reques
 	}
 	balance, err := h.accSvc.GetAccountBalance(r.Context(), id)
 	httpx.OK(w, toBalanceResponse(balance), err)
+}
+
+func (h *AccountHandler) History(w http.ResponseWriter, r *http.Request) {
+	id, err := httpx.PathUUID(r, "id")
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	q, err := httpx.DecodeQuery[historyQuery](r)
+	if err != nil {
+		httpx.WriteError(w, err)
+		return
+	}
+	hist, err := h.accSvc.History(r.Context(), id, q.Before, q.Limit)
+	httpx.OK(w, toHistoryResponse(hist), err)
 }
