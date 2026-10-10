@@ -85,6 +85,47 @@ func (r *Registry) MarkApplied(ctx context.Context, o ports.Outcome) error {
 	return err
 }
 
+func (r *Registry) Attempts(ctx context.Context, afterRef string, limit int) ([]ports.AttemptRecord, error) {
+	page, err := r.attempts.Page(ctx, afterRef, limit)
+	if err != nil || len(page) == 0 {
+		return nil, err
+	}
+	refs := make([]string, len(page))
+	for i, a := range page {
+		refs[i] = a.Ref
+	}
+	outcomes, err := r.outcomes.ByAttempts(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	byRef := make(map[string][]ports.OutcomeRecord, len(page))
+	for _, o := range outcomes {
+		d, ok := decisions[o.State]
+		if !ok {
+			return nil, fmt.Errorf("outcome %s/%s in unexpected state %s", o.Ref, o.Kind, o.State)
+		}
+		byRef[o.Ref] = append(byRef[o.Ref], ports.OutcomeRecord{
+			Kind:         ports.OutcomeKind(o.Kind),
+			Key:          o.Key,
+			Amount:       o.Amount,
+			Decision:     d,
+			Applied:      o.AppliedAt != nil,
+			AttemptCount: o.AttemptCount,
+			LastError:    deref(o.LastError),
+			UpdatedAt:    o.UpdatedAt,
+		})
+	}
+
+	out := make([]ports.AttemptRecord, len(page))
+	for i, a := range page {
+		out[i] = ports.AttemptRecord{
+			Rail: a.Rail, Ref: a.Ref, TransactionID: a.TransactionID,
+			Amount: a.Amount, CreatedAt: a.CreatedAt, Outcomes: byRef[a.Ref],
+		}
+	}
+	return out, nil
+}
+
 func (r *Registry) RecordFailure(ctx context.Context, o ports.Outcome, cause error) error {
 	return r.outcomes.RecordFailure(ctx, o.Ref, domain.OutcomeKind(o.Kind), o.Key, cause.Error())
 }

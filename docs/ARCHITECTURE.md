@@ -13,8 +13,8 @@ Target layout. Migration in progress:
   renames services → application, repositories → persistence,
   handlers → transport/http (40e06ec); two-phase rail outcomes with
   leases, backoff, Cancel and pending refunds (21a); refund children settle
-  in place, settlement label on summaries (21b)
-- pending (21c): reconciler
+  in place, settlement label on summaries (21b); reconciliation report and
+  job (21c)
 - pending (commit 2): one file per operation, single Service, UnitOfWork
 - pending (commit 3 / story 20): codes/ split out, api.Ledger, api.LedgerAdmin,
   adapter/, module.API()/Admin(), wallet module

@@ -1,5 +1,11 @@
 # Story 21a: Two-phase rail outcomes
 
+> Story 21 is three commits: 21a (two-phase outcomes), 21b (refund
+> settlement), 21c (reconciliation). Together they close the rail-consistency
+> holes from the architecture review: dual writes between rail and ledger,
+> leases that were only comments, refunds that never reached the rail, and no
+> way to see where the two sides disagree.
+
 **Goal:** a rail decision and its ledger effect can never silently disagree.
 The rail decides, the ledger applies, then acks; a crash between them is
 finished by the next run.
@@ -36,7 +42,10 @@ finished by the next run.
   outcome; without the second insert in-flight attempts would never come due.
   Locally it backfilled 39, not the 37 expected: two attempts were written by
   a test run against the old non-atomic Initiate, whose outcome insert failed
-  after the attempt insert succeeded. The bug proving itself
+  after the attempt insert succeeded. The bug proving itself.
+  The history half of the backfill was wrong: it marked every settled or
+  bounced attempt applied, but three bounces never were. Found by 21c, fixed
+  by rails migration 004
 - a cancel supersedes the settle outcome by deciding it cancelled; the worker
   acks it as Superseded and the cancel outcome does the void
 - tests migrate under sync.Once; `make test` runs packages with -p 1 because

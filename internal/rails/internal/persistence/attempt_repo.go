@@ -51,6 +51,29 @@ func (r *AttemptRepo) Lock(ctx context.Context, ref string) (*domain.Attempt, er
 	return &a, nil
 }
 
+// Page returns attempts ordered by ref, after afterRef, at most limit.
+func (r *AttemptRepo) Page(ctx context.Context, afterRef string, limit int) ([]domain.Attempt, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+attemptColumns+` FROM rails.attempts WHERE ref > $1 ORDER BY ref LIMIT $2`, afterRef, limit)
+	if err != nil {
+		return nil, errdefs.Internalf(err, "page attempts")
+	}
+	defer rows.Close()
+
+	var out []domain.Attempt
+	for rows.Next() {
+		var a domain.Attempt
+		if err := scanAttempt(rows, &a); err != nil {
+			return nil, errdefs.Internalf(err, "scan attempt")
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "page attempts rows")
+	}
+	return out, nil
+}
+
 // ByRefs loads attempts by ref, keyed by ref.
 func (r *AttemptRepo) ByRefs(ctx context.Context, refs []string) (map[string]domain.Attempt, error) {
 	rows, err := r.db.QueryContext(ctx,

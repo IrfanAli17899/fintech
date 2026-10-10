@@ -128,6 +128,59 @@ func (r *TransactionRepo) MarkPosted(ctx context.Context, id uuid.UUID) (time.Ti
 	return at, nil
 }
 
+// States loads status and captured amount for the given transactions, keyed by
+// id; ids with no transaction are absent. For reconciliation.
+func (r *TransactionRepo) States(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]domain.TransactionState, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT t.id, t.status, s.captured
+		FROM ledger.transactions t
+		JOIN ledger.transaction_summaries s ON s.id = t.id
+		WHERE t.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, errdefs.Internalf(err, "transaction states")
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]domain.TransactionState, len(ids))
+	for rows.Next() {
+		var s domain.TransactionState
+		if err := rows.Scan(&s.ID, &s.Status, &s.Captured); err != nil {
+			return nil, errdefs.Internalf(err, "scan transaction state")
+		}
+		out[s.ID] = s
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "transaction states rows")
+	}
+	return out, nil
+}
+
+// PendingRailRefunds returns rail-backed refund children still pending that
+// were created before the given time.
+func (r *TransactionRepo) PendingRailRefunds(ctx context.Context, before time.Time) ([]domain.Transaction, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT `+transactionColumns+` FROM ledger.transactions
+		WHERE relation = 'reverses' AND status = 'pending'
+		  AND rail NOT IN ('', 'internal') AND created_at < $1`, before)
+	if err != nil {
+		return nil, errdefs.Internalf(err, "pending rail refunds")
+	}
+	defer rows.Close()
+
+	var out []domain.Transaction
+	for rows.Next() {
+		var t domain.Transaction
+		if err := scanTransaction(rows, &t); err != nil {
+			return nil, errdefs.Internalf(err, "scan pending rail refund")
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "pending rail refunds rows")
+	}
+	return out, nil
+}
+
 // NextExpiredHold returns one internal pending transaction past its expiry and
 // locks it, skipping rows another worker holds. Rail-backed holds are resolved
 // by their rail, never by the clock. Tx-bound only: the caller voids the hold

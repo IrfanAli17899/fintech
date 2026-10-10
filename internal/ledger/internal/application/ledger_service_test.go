@@ -1660,6 +1660,168 @@ func TestHistory_CarriesPostedAt(t *testing.T) {
 	}
 }
 
+// ---- story 21c: reconciliation ----
+
+// reconcileLater runs reconciliation an hour ahead, past the grace window, and
+// returns the findings that touch ref or id.
+func (f fixture) reconcileLater(t *testing.T, ref string, id uuid.UUID) []domain.Finding {
+	t.Helper()
+	rep, err := f.ledger.Reconcile(f.ctx, time.Now().Add(time.Hour))
+	must(t, err)
+	var out []domain.Finding
+	for _, x := range rep.Findings {
+		if x.Kind == domain.FindingTrialBalance {
+			t.Fatalf("trial balance does not hold: %s", x.Detail)
+		}
+		if (ref != "" && x.Ref == ref) || (id != uuid.Nil && x.TransactionID == id) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func hasFinding(fs []domain.Finding, kind domain.FindingKind, reason string) bool {
+	for _, x := range fs {
+		if x.Kind == kind && x.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReconcile_OrphanAttempt(t *testing.T) {
+	f := setup(t)
+	rail, _ := rails.New(connectTestDB(t)).Get("card")
+	res, err := rail.Initiate(f.ctx, ports.RailInitiateRequest{TransactionID: uuid.New(), Amount: 700, Currency: "PKR", Kind: "topup"})
+	must(t, err)
+
+	rep, err := f.ledger.Reconcile(f.ctx, time.Now())
+	must(t, err)
+	for _, x := range rep.Findings {
+		if x.Ref == res.Ref {
+			t.Fatalf("an attempt inside the grace window may be a post in flight: %+v", x)
+		}
+	}
+	if fs := f.reconcileLater(t, res.Ref, uuid.Nil); !hasFinding(fs, domain.FindingOrphanAttempt, "") {
+		t.Fatalf("want orphan_attempt, got %+v", fs)
+	}
+}
+
+func TestReconcile_VoidedButLive(t *testing.T) {
+	f := setup(t)
+	h := cardHold(t, f)
+	// what an HTTP void did before the rail guards: the ledger lets go, the rail does not
+	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString(), System: true})
+	must(t, err)
+
+	if fs := f.reconcileLater(t, h.RailRef, h.ID); !hasFinding(fs, domain.FindingDivergence, domain.ReasonVoidedButLive) {
+		t.Fatalf("want voided_but_live, got %+v", fs)
+	}
+}
+
+func TestReconcile_SettledNotCredited(t *testing.T) {
+	f := setup(t)
+	h := cardHold(t, f)
+	rail, _ := rails.New(connectTestDB(t)).Get("card")
+	must(t, rail.Settle(f.ctx, h.RailRef))
+	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString(), System: true})
+	must(t, err)
+
+	fs := f.reconcileLater(t, h.RailRef, h.ID)
+	if !hasFinding(fs, domain.FindingDivergence, domain.ReasonSettledNotCredited) || !hasFinding(fs, domain.FindingUnapplied, "") {
+		t.Fatalf("want settled_not_credited and unapplied, got %+v", fs)
+	}
+}
+
+func TestReconcile_UnappliedOnlyPastGrace(t *testing.T) {
+	f := setup(t)
+	h := cardHold(t, f)
+	rail, _ := rails.New(connectTestDB(t)).Get("card")
+	must(t, rail.Settle(f.ctx, h.RailRef)) // decided, worker not yet run
+
+	rep, err := f.ledger.Reconcile(f.ctx, time.Now())
+	must(t, err)
+	for _, x := range rep.Findings {
+		if x.Ref == h.RailRef {
+			t.Fatalf("a fresh decision is in flight, not a finding: %+v", x)
+		}
+	}
+	fs := f.reconcileLater(t, h.RailRef, h.ID)
+	if !hasFinding(fs, domain.FindingUnapplied, "") || len(fs) != 1 {
+		t.Fatalf("want only unapplied, got %+v", fs)
+	}
+}
+
+func TestReconcile_Stuck(t *testing.T) {
+	f := setup(t)
+	h := cardHold(t, f)
+	reg := rails.New(connectTestDB(t))
+	o := ports.Outcome{Rail: "card", Ref: h.RailRef, Kind: ports.OutcomeSettle}
+	for i := 0; i < 10; i++ {
+		must(t, reg.RecordFailure(f.ctx, o, errors.New("provider down")))
+	}
+	if fs := f.reconcileLater(t, h.RailRef, h.ID); !hasFinding(fs, domain.FindingStuck, "") {
+		t.Fatalf("want stuck, got %+v", fs)
+	}
+}
+
+func TestReconcile_RefundNeverSent(t *testing.T) {
+	calls := &railCalls{fail: 1000}
+	instantFake := fakeRail{
+		name:  "fake",
+		props: ports.RailProperties{Instant: true, Reversible: true},
+		res:   ports.RailInitiateResult{Ref: "r-" + uuid.NewString(), Settlement: ports.SettlementImmediate},
+		calls: calls,
+	}
+	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": instantFake})
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	x := transfer(cash, ali, 100, uuid.NewString())
+	x.Kind, x.Rail = kindTopup, "fake"
+	posted := f.post(t, x)
+
+	child, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailFailed) {
+		t.Fatalf("want RAIL_FAILED, got %v", err)
+	}
+	if fs := f.reconcileLater(t, "", child.ID); !hasFinding(fs, domain.FindingDivergence, domain.ReasonRefundNeverSent) {
+		t.Fatalf("want refund_never_sent, got %+v", fs)
+	}
+}
+
+func TestReconcile_HealthyFlowsReportNothing(t *testing.T) {
+	f := setup(t)
+	f.drain(t)
+
+	settled, _ := settledCardPayment(t, f)
+	refund, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1500, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+
+	cancelled := cardHold(t, f)
+	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: cancelled.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	x := transfer(cash, ali, 1099, uuid.NewString()) // swift bounce
+	x.Kind, x.Rail = kindTopup, "swift"
+	bounced := f.post(t, x)
+
+	f.applyAll(t, time.Now().Add(96*time.Hour))
+
+	for _, c := range []struct {
+		ref string
+		id  uuid.UUID
+	}{
+		{settled.RailRef, *settled.ParentID}, {"", refund.ID},
+		{cancelled.RailRef, cancelled.ID}, {bounced.RailRef, bounced.ID},
+	} {
+		if fs := f.reconcileLater(t, c.ref, c.id); len(fs) != 0 {
+			t.Fatalf("healthy flow reported: %+v", fs)
+		}
+	}
+}
+
 // ---- story 11b: kind is product-owned ----
 
 func TestPost_KindIsProductOwned(t *testing.T) {

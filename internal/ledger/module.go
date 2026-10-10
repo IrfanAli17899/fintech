@@ -37,11 +37,12 @@ func New(db *database.DB, rails ports.RailRegistry) *Module {
 		jobs: []*scheduler.Loop{
 			scheduler.New("expire-holds", time.Minute, ledgerSvc.ExpirerJob(500)),
 			scheduler.New("outcomes", time.Minute, ledgerSvc.OutcomesJob(20)),
+			scheduler.New("reconcile", 15*time.Minute, ledgerSvc.ReconcileJob(50)),
 		},
 		handlers: []interface{ RegisterRoutes(*http.ServeMux) }{
 			transporthttp.NewAccountHandler(accSvc),
 			transporthttp.NewTransactionHandler(ledgerSvc),
-			transporthttp.NewAdminHandler(adminSvc),
+			transporthttp.NewAdminHandler(adminSvc, ledgerSvc),
 		},
 	}
 }

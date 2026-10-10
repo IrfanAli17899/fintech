@@ -57,6 +57,9 @@ func (fakeRegistry) ClaimDue(context.Context, time.Time, time.Duration, int) ([]
 }
 func (fakeRegistry) MarkApplied(context.Context, ports.Outcome) error          { return nil }
 func (fakeRegistry) RecordFailure(context.Context, ports.Outcome, error) error { return nil }
+func (fakeRegistry) Attempts(context.Context, string, int) ([]ports.AttemptRecord, error) {
+	return nil, nil
+}
 
 var instantInternal = fakeRail{
 	name:  "internal",

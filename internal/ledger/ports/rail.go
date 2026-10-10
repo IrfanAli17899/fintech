@@ -102,6 +102,28 @@ type Outcome struct {
 	Reason        string
 }
 
+// AttemptRecord is one attempt and every outcome recorded for it, as the rail
+// sees them; reconciliation compares it with the ledger.
+type AttemptRecord struct {
+	Rail          string
+	Ref           string
+	TransactionID uuid.UUID
+	Amount        int64
+	CreatedAt     time.Time
+	Outcomes      []OutcomeRecord
+}
+
+type OutcomeRecord struct {
+	Kind         OutcomeKind
+	Key          string
+	Amount       int64
+	Decision     Decision
+	Applied      bool
+	AttemptCount int
+	LastError    string
+	UpdatedAt    time.Time
+}
+
 // RailRegistry resolves rails by name and hands the ledger the outcomes that
 // need work.
 type RailRegistry interface {
@@ -115,4 +137,7 @@ type RailRegistry interface {
 	// RecordFailure counts a failed attempt to decide or apply an outcome,
 	// backs it off and releases its lease so the backoff decides the retry.
 	RecordFailure(ctx context.Context, o Outcome, cause error) error
+	// Attempts pages through every attempt with its outcomes, ordered by ref,
+	// starting after afterRef ("" for the first page). For reconciliation.
+	Attempts(ctx context.Context, afterRef string, limit int) ([]AttemptRecord, error)
 }

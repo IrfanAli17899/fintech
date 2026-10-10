@@ -1,6 +1,8 @@
 package transporthttp
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
 )
@@ -40,4 +42,43 @@ func toVerifyBalancesResponse(ms []domain.BalanceMismatch) *verifyBalancesRespon
 		}
 	}
 	return &verifyBalancesResponse{Healthy: len(ms) == 0, Mismatches: out}
+}
+
+type findingResponse struct {
+	Kind          string    `json:"kind"`
+	Reason        string    `json:"reason,omitempty"`
+	Rail          string    `json:"rail,omitempty"`
+	Ref           string    `json:"ref,omitempty"`
+	TransactionID uuid.UUID `json:"transaction_id"`
+	Detail        string    `json:"detail"`
+}
+
+type reconciliationResponse struct {
+	At              time.Time         `json:"at"`
+	Clean           bool              `json:"clean"`
+	AttemptsChecked int               `json:"attempts_checked"`
+	Counts          map[string]int    `json:"counts"`
+	Findings        []findingResponse `json:"findings"`
+}
+
+func toReconciliationResponse(r *domain.ReconciliationReport) *reconciliationResponse {
+	if r == nil {
+		return nil
+	}
+	out := &reconciliationResponse{
+		At: r.At, Clean: r.Clean(), AttemptsChecked: r.AttemptsChecked,
+		Counts: map[string]int{}, Findings: make([]findingResponse, len(r.Findings)),
+	}
+	for i, f := range r.Findings {
+		key := string(f.Kind)
+		if f.Reason != "" {
+			key += ":" + f.Reason
+		}
+		out.Counts[key]++
+		out.Findings[i] = findingResponse{
+			Kind: string(f.Kind), Reason: f.Reason, Rail: f.Rail, Ref: f.Ref,
+			TransactionID: f.TransactionID, Detail: f.Detail,
+		}
+	}
+	return out
 }

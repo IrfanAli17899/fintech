@@ -60,8 +60,15 @@ func (s *LedgerService) ApplyOutcomes(ctx context.Context, now time.Time, batchS
 			o.Decision, o.Reason = d, reason
 		}
 
+		// a row that keeps failing to apply backs off like one that fails to
+		// decide, instead of holding the rest of the batch until the lease ends
 		if err := s.applyOutcome(ctx, o, &st); err != nil {
-			return st, err
+			st.Failed++
+			log.Printf("outcomes: apply %s %s via %s: %v", o.Kind, o.Ref, o.Rail, err)
+			if err := s.rails.RecordFailure(ctx, o, err); err != nil {
+				return st, err
+			}
+			continue
 		}
 		if err := s.rails.MarkApplied(ctx, o); err != nil {
 			return st, err
@@ -120,7 +127,9 @@ func (s *LedgerService) applyOutcome(ctx context.Context, o ports.Outcome, st *O
 		}
 		switch o.Decision {
 		case ports.DecisionSettled:
-			_, _, err = s.postPending(ctx, childID, "refund-settle:"+o.Key)
+			// not refund-settle: 21a settled refunds by Capture under that key,
+			// and reusing it with a different request would never succeed
+			_, _, err = s.postPending(ctx, childID, "refund-post:"+o.Key)
 			st.Refunded++
 		case ports.DecisionBounced:
 			_, _, err = s.systemVoid(ctx, childID, "refund-refuse:"+o.Key, "refund refused: "+o.Reason)
