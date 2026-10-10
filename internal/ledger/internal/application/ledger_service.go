@@ -446,7 +446,7 @@ func (s *LedgerService) Children(ctx context.Context, parentID uuid.UUID) ([]dom
 
 // ---- posting pipeline ----
 
-// txRepos is the set of repositories bound to one database transaction.
+// txRepos is the set of repos bound to one database transaction.
 type txRepos struct {
 	accounts *persistence.AccountRepo
 	txns     *persistence.TransactionRepo

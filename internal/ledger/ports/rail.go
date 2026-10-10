@@ -59,7 +59,8 @@ func (b *RailBounce) Error() string { return "rail bounced: " + b.Reason }
 // RailRegistry resolves a rail by name.
 type RailRegistry interface {
 	Get(name string) (Rail, bool)
-	// Due returns deferred attempts past their settlement time, at most limit,
-	// partitioned across concurrent callers.
+	// Due returns deferred attempts past their settlement time, at most limit.
+	// Partitioning across concurrent callers is not guaranteed yet; leases
+	// arrive in story 21a.
 	Due(ctx context.Context, now time.Time, limit int) ([]DueAttempt, error)
 }

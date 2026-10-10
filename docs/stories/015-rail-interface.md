@@ -35,3 +35,5 @@
   (story 21); Initiate must be idempotent on TransactionID so retries are safe
 - migrations are append-only from here: 009 redefines the trigger function
   rather than editing 003
+
+**Addendum:** the Rail port moved from `ledger/api` to `ledger/ports` in the layout refactor; see docs/ARCHITECTURE.md.
