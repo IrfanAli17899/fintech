@@ -52,11 +52,11 @@ func connectTestDB(t *testing.T) *database.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://fintech:fintech@localhost:5432/fintech?sslmode=disable"
+		dsn = "postgres://fintech:fintech@localhost:5432/fintech_test?sslmode=disable"
 	}
 	db, err := database.Connect(context.Background(), dsn)
 	if err != nil {
-		t.Skipf("database not available: %v", err)
+		t.Skipf("test database not available (make test-db): %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
 	var merr error

@@ -19,7 +19,16 @@ migrate-up:
 migrate-down:
 	migrate -path migrations -database "$(DB_URL)" down 1
 
+TEST_DB_URL ?= postgres://fintech:fintech@localhost:5432/fintech_test?sslmode=disable
+
+# Tests never touch the dev database: they leave orphans and divergences by
+# design, and the ledger is append-only, so they could never be cleaned up.
+test-db:
+	docker compose exec -T postgres psql -U fintech -d fintech -tAc \
+	  "SELECT 1 FROM pg_database WHERE datname = 'fintech_test'" | grep -q 1 || \
+	docker compose exec -T postgres psql -U fintech -d fintech -c "CREATE DATABASE fintech_test"
+
 # -p 1: tests share a database; parallel packages race on rail outcomes.
 # Do not remove until each package gets its own database (testcontainers).
-test:
-	go test -count=1 -race -p 1 ./...
+test: test-db
+	TEST_DATABASE_URL="$(TEST_DB_URL)" go test -count=1 -race -p 1 ./...

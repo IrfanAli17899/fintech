@@ -48,9 +48,12 @@ without either side changing the other.
   batch; refund children post under refund-post:{key}, because 21a settled
   refunds by Capture under refund-settle:{key} and reusing that key for a
   different request would fail forever
-- everything else reported locally is test data by design: orphans from the
+- everything else reported locally was test data by design: orphans from the
   rail adapter tests (random transaction ids), the 22 refund_not_posted from
-  the 21a → 21b cutover, and the rows the reconcile tests create
+  the 21a → 21b cutover, and the rows the reconcile tests create. Tests now
+  run against their own database (fintech_test, `make test-db`), so the dev
+  report only shows the dev database; the ledger is append-only, so test rows
+  could never have been cleaned up in place
 
 **Not this**
 

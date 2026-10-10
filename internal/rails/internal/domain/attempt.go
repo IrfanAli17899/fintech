@@ -30,6 +30,3 @@ type Attempt struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
-
-// Decided reports whether the rail has reached an outcome for this attempt.
-func (a Attempt) Decided() bool { return a.State != AttemptInitiated }

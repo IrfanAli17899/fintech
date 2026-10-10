@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/rails/internal/domain"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
@@ -123,27 +122,4 @@ func (r *AttemptRepo) Transition(ctx context.Context, ref string, from, to domai
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
-}
-
-// ByTransactions loads attempts for the given ledger transaction ids.
-func (r *AttemptRepo) ByTransactions(ctx context.Context, ids []uuid.UUID) ([]domain.Attempt, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+attemptColumns+` FROM rails.attempts WHERE transaction_id = ANY($1)`, ids)
-	if err != nil {
-		return nil, errdefs.Internalf(err, "attempts by transactions")
-	}
-	defer rows.Close()
-
-	var out []domain.Attempt
-	for rows.Next() {
-		var a domain.Attempt
-		if err := scanAttempt(rows, &a); err != nil {
-			return nil, errdefs.Internalf(err, "scan attempt")
-		}
-		out = append(out, a)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errdefs.Internalf(err, "attempts by transactions rows")
-	}
-	return out, nil
 }
