@@ -2,14 +2,12 @@ package adapters
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/irfanali17899/fintech/internal/ledger/ports"
+	"github.com/irfanali17899/fintech/internal/rails/internal/domain"
 )
-
-var ErrNotReversible = errors.New("rtp rail: transfers are final and cannot be reversed")
 
 // RTPRail simulates an instant, irreversible bank rail such as Raast (PKR) or SARIE (SAR).
 type RTPRail struct {
@@ -38,5 +36,7 @@ func (r *RTPRail) Initiate(_ context.Context, req ports.RailInitiateRequest) (po
 }
 
 func (r *RTPRail) Settle(context.Context, string) error { return nil }
-
-func (r *RTPRail) Reverse(context.Context, string, int64) error { return ErrNotReversible }
+func (r *RTPRail) Cancel(context.Context, string) error { return domain.ErrCannotCancel }
+func (r *RTPRail) Reverse(context.Context, string, string, int64) error {
+	return domain.ErrNotReversible
+}

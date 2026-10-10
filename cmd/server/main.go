@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/irfanali17899/fintech/internal/ledger"
 	"github.com/irfanali17899/fintech/internal/rails"
 	"github.com/irfanali17899/fintech/pkg/database"
+	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 
 func main() {
@@ -29,6 +31,14 @@ func main() {
 		log.Fatalf("database initialization failed: %v", err)
 	}
 	defer db.Close()
+	if v := os.Getenv("DB_MAX_OPEN"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			log.Fatalf("DB_MAX_OPEN must be a positive integer, got %q", v)
+		}
+		db.SetMaxOpenConns(n)
+		db.SetMaxIdleConns(n)
+	}
 
 	if err := ledger.Migrate(ctx, db.DB, dbURL); err != nil {
 		log.Fatalf("ledger database migrations failed: %v", err)
@@ -48,7 +58,7 @@ func main() {
 	ledgerMod.RegisterRoutes(mux)
 	server := &http.Server{
 		Addr:              ":4000",
-		Handler:           mux,
+		Handler:           httpx.WithTimeout(mux, 15*time.Second),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"strconv"
 	"time"
 
@@ -13,10 +12,9 @@ import (
 	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/pkg/database"
-	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
-// System is set only by the settlement path; it lets a capture or void act on
+// System is set only by the outcome worker; it lets a capture or void act on
 // a hold a rail owns. HTTP callers never set it.
 type CaptureCommand struct {
 	HoldID         uuid.UUID
@@ -24,6 +22,7 @@ type CaptureCommand struct {
 	IdempotencyKey string
 	System         bool
 }
+
 type VoidCommand struct {
 	HoldID         uuid.UUID
 	IdempotencyKey string
@@ -77,7 +76,6 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 	if t.Status == "" {
 		t.Status = domain.TransactionStatusPosted
 	}
-
 	if err := t.Validate(); err != nil {
 		return nil, false, err
 	}
@@ -86,7 +84,6 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 		created  *domain.Transaction
 		replayed bool
 	)
-
 	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
 		r := s.repos(tx)
 
@@ -115,6 +112,12 @@ func (s *LedgerService) Post(ctx context.Context, t domain.Transaction) (*domain
 // Reverse posts a refund transaction that undoes all or part of the original.
 // The original is locked for the duration so concurrent partial reversals
 // cannot together exceed its total.
+//
+// Internal reversals post immediately. Rail-backed ones post as pending
+// (reserving the money), commit, and then ask the rail to refund; the outcome
+// worker captures or voids the pending child when the rail decides. A replay
+// of a still-pending refund asks the rail again, so a retry after a rail
+// timeout actually retries.
 func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domain.Transaction, bool, error) {
 	var (
 		created  *domain.Transaction
@@ -142,9 +145,10 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 		if original.Status != domain.TransactionStatusPosted {
 			return domain.ErrTransactionNotReversible(original.ID, original.Status)
 		}
-		rail, ok := s.rails.Get(original.Rail)
-		if ok && !rail.Properties().Reversible {
-			return domain.ErrRailNotReversible(original.ID, original.Rail)
+		if original.RailBacked() {
+			if rail, ok := s.rails.Get(original.Rail); !ok || !rail.Properties().Reversible {
+				return domain.ErrRailNotReversible(original.ID, original.Rail)
+			}
 		}
 		original.Entries, err = r.entries.ListByTransaction(ctx, original.ID)
 		if err != nil {
@@ -165,9 +169,6 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 		if amount <= 0 || reversed+amount > total {
 			return domain.ErrReversalExceedsOriginal(original.ID, total-reversed, amount)
 		}
-		if original.RailBacked() && amount != total {
-			return domain.ErrRailPartialRefund(original.ID, original.Rail)
-		}
 
 		t := domain.Transaction{
 			Kind:           domain.TransactionKind(cmd.Kind),
@@ -178,6 +179,8 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 			Entries:        original.Reverse(amount, reversedBy),
 		}
 		if original.RailBacked() {
+			// reserve the money now; the worker posts it when the rail confirms
+			t.Status = domain.TransactionStatusPending
 			t.Rail, t.RailRef = original.Rail, original.RailRef
 		}
 		if err := t.Validate(); err != nil {
@@ -188,21 +191,35 @@ func (s *LedgerService) Reverse(ctx context.Context, cmd ReverseCommand) (*domai
 		if err != nil {
 			return err
 		}
-		// After post, so a refund the ledger rejects (e.g. insufficient funds)
-		// never reaches the rail. A commit failure after this still diverges;
-		// story 21 closes that.
-		if original.RailBacked() {
-			if err := rail.Reverse(ctx, original.RailRef, amount); err != nil {
-				return domain.ErrRailFailed(original.Rail, "reverse", err)
-			}
-		}
-
 		return r.keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
 	})
 	if err != nil {
 		return nil, false, err
 	}
+
+	if created.RailBacked() && created.Status == domain.TransactionStatusPending {
+		if err := s.refundAtRail(ctx, created); err != nil {
+			return created, replayed, err
+		}
+	}
 	return created, replayed, nil
+}
+
+// refundAtRail asks the rail to refund a pending refund child, outside any
+// lock. The child's id is the refund's idempotency key, so a repeat is a no-op
+// at the rail and the outcome worker knows which child to settle or void. If
+// the call fails the reservation stays until a retry or the reconciler.
+func (s *LedgerService) refundAtRail(ctx context.Context, child *domain.Transaction) error {
+	rail, ok := s.rails.Get(child.Rail)
+	if !ok {
+		return domain.ErrUnknownRail(child.Rail)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, railCallBudget)
+	defer cancel()
+	if err := rail.Reverse(callCtx, child.RailRef, child.ID.String(), child.Total()); err != nil {
+		return domain.ErrRailFailed(child.Rail, "reverse", err)
+	}
+	return nil
 }
 
 func (s *LedgerService) GetTransaction(ctx context.Context, id uuid.UUID) (*domain.Transaction, error) {
@@ -228,9 +245,13 @@ func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domai
 			return err
 		}
 
-		h, err := s.lockPending(ctx, r, cmd.HoldID, cmd.System)
+		h, err := s.lockPending(ctx, r, cmd.HoldID)
 		if err != nil {
 			return err
+		}
+		// only the outcome worker may capture what a rail owns
+		if h.RailBacked() && !cmd.System {
+			return domain.ErrRailManagedHold(h.ID, h.Rail)
 		}
 		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
 		if err != nil {
@@ -286,139 +307,129 @@ func (s *LedgerService) Capture(ctx context.Context, cmd CaptureCommand) (*domai
 
 // Void releases whatever a hold still reserves and marks it voided. Captures
 // already posted against it are untouched.
+//
+// A rail-backed hold is not voided here: the key is committed, then the rail
+// is asked to cancel, and the outcome worker voids once it confirms. The hold
+// comes back still pending. A replay of a still-pending rail void asks the rail
+// again.
 func (s *LedgerService) Void(ctx context.Context, cmd VoidCommand) (*domain.Transaction, bool, error) {
 	var (
 		voided   *domain.Transaction
 		replayed bool
 	)
 	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		r := s.repos(tx)
-
-		hash := domain.HashOf("void", cmd.HoldID.String(), cmd.Reason)
-		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
-		if err != nil {
-			return err
-		}
-		if rp != nil {
-			voided, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
-			replayed = true
-			return err
-		}
-
-		h, err := s.lockPending(ctx, r, cmd.HoldID, cmd.System)
-		if err != nil {
-			return err
-		}
-		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
-		if err != nil {
-			return err
-		}
-
-		captured := h.Consumed(capturedBy)
-		if remaining := h.Total() - captured; remaining > 0 {
-			rest := domain.Transaction{Entries: h.Scaled(remaining, capturedBy)}
-			if err := s.releaseReservation(ctx, r, pendingSums(rest)); err != nil {
-				return err
-			}
-		}
-
-		var reason *string
-		if cmd.Reason != "" {
-			reason = &cmd.Reason
-		}
-		if err := r.txns.MarkVoided(ctx, h.ID, reason); err != nil {
-			return err
-		}
-		h.Status = domain.TransactionStatusVoided
-		h.StatusReason = reason
-		voided = h
-		return r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
+		var err error
+		voided, replayed, err = s.voidLocked(ctx, s.repos(tx), cmd)
+		return err
 	})
 	if err != nil {
 		return nil, false, err
 	}
+	if !cmd.System && voided.RailBacked() && voided.Status == domain.TransactionStatusPending {
+		if err := s.cancelAtRail(ctx, voided); err != nil {
+			return voided, replayed, err
+		}
+	}
 	return voided, replayed, nil
 }
 
-// SettleDue asks each rail with due attempts for an outcome and applies it:
-// settled → the pending transaction posts; bounced → it voids with the reason.
-// Rails that answer with any other error are left for the next run.
-func (s *LedgerService) SettleDue(ctx context.Context, now time.Time, batchSize int) (settled, bounced, diverged int, err error) {
-	due, err := s.rails.Due(ctx, now, batchSize)
+// voidLocked is Void's work inside the caller's transaction: claim the key,
+// lock the hold, release what it still reserves. For a rail-backed hold it only
+// checks the rail can cancel and links the key; nothing changes until the rail
+// decides.
+func (s *LedgerService) voidLocked(ctx context.Context, r txRepos, cmd VoidCommand) (*domain.Transaction, bool, error) {
+	hash := domain.HashOf("void", cmd.HoldID.String(), cmd.Reason)
+	rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
 	if err != nil {
-		return 0, 0, 0, err
+		return nil, false, err
+	}
+	if rp != nil {
+		t, err := s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+		return t, true, err
 	}
 
-	for _, d := range due {
-		rail, ok := s.rails.Get(d.Rail)
-		if !ok {
-			log.Printf("settle: unknown rail %q for %s", d.Rail, d.Ref)
-			continue
-		}
+	h, err := s.lockPending(ctx, r, cmd.HoldID)
+	if err != nil {
+		return nil, false, err
+	}
 
-		var bounce *ports.RailBounce
-		switch err := rail.Settle(ctx, d.Ref); {
-		case err == nil:
-		case errors.As(err, &bounce):
-		default:
-			log.Printf("settle %s via %s: %v", d.Ref, d.Rail, err)
-			continue
+	if h.RailBacked() && !cmd.System {
+		// checked before the key is linked, so a refusal never spends it
+		if rail, ok := s.rails.Get(h.Rail); !ok || !rail.Properties().CanCancel {
+			return nil, false, domain.ErrRailCannotCancel(h.ID, h.Rail)
 		}
+		return h, false, r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
+	}
 
-		if bounce != nil {
-			_, _, err = s.Bounce(ctx, d.TransactionID, bounce.Reason)
-		} else {
-			_, _, err = s.Settle(ctx, d.TransactionID)
-		}
-		switch {
-		case err == nil:
-			if bounce != nil {
-				bounced++
-			} else {
-				settled++
-			}
-		case errdefs.Is(err, domain.CodeTransactionNotPending):
-			// rail-backed holds can't be voided or expired outside this path,
-			// so the rail and the ledger now disagree
-			diverged++
-			log.Printf("DIVERGENCE: settle %s via %s: rail decided but ledger transaction %s is not pending", d.Ref, d.Rail, d.TransactionID)
-		case errdefs.Is(err, domain.CodeTransactionNotFound):
-			// the rail knows a transfer the ledger never committed: an orphan.
-			// Reconciliation (21) reports these; the worker moves on.
-			diverged++
-			log.Printf("DIVERGENCE: settle %s: orphan attempt, no ledger transaction %s", d.Ref, d.TransactionID)
-		default:
-			return settled, bounced, diverged, err
+	capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
+	if err != nil {
+		return nil, false, err
+	}
+	captured := h.Consumed(capturedBy)
+	if remaining := h.Total() - captured; remaining > 0 {
+		rest := domain.Transaction{Entries: h.Scaled(remaining, capturedBy)}
+		if err := s.releaseReservation(ctx, r, pendingSums(rest)); err != nil {
+			return nil, false, err
 		}
 	}
-	return settled, bounced, diverged, nil
+
+	var reason *string
+	if cmd.Reason != "" {
+		reason = &cmd.Reason
+	}
+	if err := r.txns.MarkVoided(ctx, h.ID, reason); err != nil {
+		return nil, false, err
+	}
+	h.Status = domain.TransactionStatusVoided
+	h.StatusReason = reason
+	return h, false, r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
 }
 
-// ExpireHolds voids every pending transaction past its expiry, in batches of
-// batchSize, each void in its own transaction. Safe to run concurrently on
-// several replicas: ExpiredHolds uses SKIP LOCKED to partition the work.
-func (s *LedgerService) ExpireHolds(ctx context.Context, now time.Time, batchSize int) (int, error) {
-	var ids []uuid.UUID
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		ids, err = s.repos(tx).txns.ExpiredHolds(ctx, now, batchSize)
-		return err
-	})
-	if err != nil {
-		return 0, err
+// cancelAtRail asks the rail to withdraw a pending transfer, outside any lock.
+// Cancel is idempotent at the rail, so a replayed void can safely ask again.
+func (s *LedgerService) cancelAtRail(ctx context.Context, h *domain.Transaction) error {
+	rail, ok := s.rails.Get(h.Rail)
+	if !ok {
+		return domain.ErrUnknownRail(h.Rail)
 	}
+	callCtx, cancel := context.WithTimeout(ctx, railCallBudget)
+	defer cancel()
+	switch err := rail.Cancel(callCtx, h.RailRef); {
+	case err == nil:
+		return nil
+	case errors.Is(err, ports.ErrRailAlreadyDecided):
+		return domain.ErrHoldAlreadySettling(h.ID, h.Rail)
+	default:
+		return domain.ErrRailFailed(h.Rail, "cancel", err)
+	}
+}
 
+// ExpireHolds voids internal pending transactions past their expiry, at most
+// batchSize, one transaction per hold: the row is selected FOR UPDATE SKIP
+// LOCKED and voided in the same transaction, so replicas partition the work
+// and no transaction ever holds balance locks for more than one hold.
+// Rail-backed holds are never expired here; their rail resolves them.
+func (s *LedgerService) ExpireHolds(ctx context.Context, now time.Time, batchSize int) (int, error) {
 	voided := 0
-	for _, id := range ids {
-		_, _, err := s.Void(ctx, VoidCommand{HoldID: id, IdempotencyKey: "expire:" + id.String(), Reason: "expired"})
-		switch {
-		case err == nil:
-			voided++
-		case errdefs.Is(err, domain.CodeTransactionNotPending):
-			// captured or voided by someone else between select and void; fine
-		default:
+	for voided < batchSize {
+		found := false
+		err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+			r := s.repos(tx)
+			id, ok, err := r.txns.NextExpiredHold(ctx, now)
+			if err != nil || !ok {
+				return err
+			}
+			found = true
+			_, _, err = s.voidLocked(ctx, r, VoidCommand{HoldID: id, IdempotencyKey: "expire:" + id.String(), Reason: "expired"})
+			return err
+		})
+		if err != nil {
 			return voided, err
 		}
+		if !found {
+			return voided, nil
+		}
+		voided++
 	}
 	return voided, nil
 }
@@ -466,13 +477,16 @@ func (s *LedgerService) repos(tx *sql.Tx) txRepos {
 }
 
 // post runs a validated transaction through account resolution, the overdraft
-// check, and persistence. The caller owns the tx, the idempotency claim, and
-// any follow-up such as status flips or key linking.
+// check, the rail, and persistence. The caller owns the tx, the idempotency
+// claim, and any follow-up such as status flips or key linking.
+//
+// A rail-backed post holds this tx's connection and Initiate opens a second
+// one for the rails tx, so the pool must exceed the number of concurrent
+// rail-backed posts. The outbox (capstone) removes the second connection.
 func (s *LedgerService) post(ctx context.Context, r txRepos, t domain.Transaction) (*domain.Transaction, error) {
 	if t.ID == uuid.Nil {
 		t.ID = uuid.Must(uuid.NewV7())
 	}
-
 	accMap, currency, err := s.resolveAccounts(ctx, r, t)
 	if err != nil {
 		return nil, err
@@ -520,7 +534,7 @@ func (s *LedgerService) resolveAccounts(ctx context.Context, r txRepos, t domain
 // rail's answer decide whether this posts now or stays pending.
 func (s *LedgerService) initiateRail(ctx context.Context, t *domain.Transaction, currency string) error {
 	if t.RailRef != "" {
-		return nil // settling an attempt the rail already knows; nothing to initiate
+		return nil // a child of an attempt the rail already knows; nothing to initiate
 	}
 	if t.Rail == "" {
 		t.Rail = domain.RailInternal
@@ -589,7 +603,7 @@ func (s *LedgerService) write(ctx context.Context, r txRepos, t domain.Transacti
 	return created, nil
 }
 
-// loadTransaction works with either pool-bound or tx-bound persistence.
+// loadTransaction works with either pool-bound or tx-bound repos.
 func (s *LedgerService) loadTransaction(ctx context.Context, txns *persistence.TransactionRepo, ents *persistence.EntryRepo, id uuid.UUID) (*domain.Transaction, error) {
 	t, err := txns.GetByID(ctx, id)
 	if err != nil {
@@ -621,16 +635,14 @@ func (s *LedgerService) releaseReservation(ctx context.Context, r txRepos, sums 
 	return nil
 }
 
-func (s *LedgerService) lockPending(ctx context.Context, r txRepos, id uuid.UUID, system bool) (*domain.Transaction, error) {
+// lockPending loads a pending transaction with its row locked, plus entries.
+func (s *LedgerService) lockPending(ctx context.Context, r txRepos, id uuid.UUID) (*domain.Transaction, error) {
 	h, err := r.txns.LockByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if h.Status != domain.TransactionStatusPending {
 		return nil, domain.ErrTransactionNotPending(h.ID, h.Status)
-	}
-	if h.RailBacked() && !system {
-		return nil, domain.ErrRailManagedHold(h.ID, h.Rail)
 	}
 	h.Entries, err = r.entries.ListByTransaction(ctx, h.ID)
 	if err != nil {

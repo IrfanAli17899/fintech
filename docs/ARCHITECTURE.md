@@ -11,9 +11,9 @@ Target layout. Migration in progress:
 - done: schema per module, own migration tracking table, no cross-schema FKs,
   rails depends on ledger contract only, ports/ split out of api/, layer
   renames services → application, repositories → persistence,
-  handlers → transport/http (40e06ec)
-- pending (21a/b/c): leases, two-phase attempts, Cancel, pending refunds,
-  reconciler
+  handlers → transport/http (40e06ec); two-phase rail outcomes with
+  leases, backoff, Cancel and pending refunds (21a)
+- pending (21b/c): refund children settle in place (PostPending), reconciler
 - pending (commit 2): one file per operation, single Service, UnitOfWork
 - pending (commit 3 / story 20): codes/ split out, api.Ledger, api.LedgerAdmin,
   adapter/, module.API()/Admin(), wallet module
@@ -104,6 +104,9 @@ duration of the work, never just the select.
   key, errors cross as codes only, DTOs are plain values (no pointers to internals,
   no iterators, no driver types)
 - migrations are append-only (since story 15); fixes are new migrations
+- connection pool: a rail-backed post holds two connections (ledger tx +
+  rails tx) until the outbox lands, and every replica opens its own pool, so
+  replicas × DB_MAX_OPEN < max_connections − headroom (migrations, psql, admin)
 - deployment shapes: in-process today; Build 4 adds cmd/ledger-svc and cmd/finance-svc
   with gRPC adapters implementing the same api interfaces, plus an outbox
 

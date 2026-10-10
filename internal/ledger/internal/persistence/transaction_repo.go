@@ -69,14 +69,17 @@ func (r *TransactionRepo) get(ctx context.Context, id uuid.UUID, lock bool) (*do
 	return &t, nil
 }
 
-// ChildAmountsByAccount sums, per account, the posted children of parent with
-// the given relation: reversals of a payment, or captures of a hold.
+// ChildAmountsByAccount sums, per account, the children of parent with the
+// given relation that still claim value: posted captures or reversals, plus
+// pending reversals (a rail refund awaiting its outcome still reserves the
+// amount). Voided children count for nothing.
 func (r *TransactionRepo) ChildAmountsByAccount(ctx context.Context, parentID uuid.UUID, relation domain.TransactionRelation) (map[uuid.UUID]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.account_id, SUM(e.amount)
 		FROM ledger.transactions t
 		JOIN ledger.entries e ON e.transaction_id = t.id
-		WHERE t.parent_id = $1 AND t.relation = $2 AND t.status = 'posted'
+		WHERE t.parent_id = $1 AND t.relation = $2
+		  AND t.status IN ('posted', 'pending')
 		GROUP BY e.account_id`, parentID, relation)
 	if err != nil {
 		return nil, errdefs.Internalf(err, "child amounts by account")
@@ -110,34 +113,25 @@ func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID, reason *
 	return nil
 }
 
-// ExpiredHolds returns ids of internal pending transactions whose expiry has
-// passed, at most limit, skipping rows another worker already holds. Rail-backed
-// holds are resolved by their rail, never by the clock. Only meaningful inside
-// a transaction; the lock lasts until that transaction ends.
-func (r *TransactionRepo) ExpiredHolds(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error) {
-	rows, err := r.db.QueryContext(ctx, `
+// NextExpiredHold returns one internal pending transaction past its expiry and
+// locks it, skipping rows another worker holds. Rail-backed holds are resolved
+// by their rail, never by the clock. Tx-bound only: the caller voids the hold
+// in the same transaction, so the lock covers the work.
+func (r *TransactionRepo) NextExpiredHold(ctx context.Context, now time.Time) (uuid.UUID, bool, error) {
+	var id uuid.UUID
+	err := r.db.QueryRowContext(ctx, `
 		SELECT id FROM ledger.transactions
 		WHERE status = 'pending' AND expires_at <= $1 AND rail IN ('', 'internal')
 		ORDER BY expires_at
-		LIMIT $2
-		FOR UPDATE SKIP LOCKED`, now, limit)
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED`, now).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
 	if err != nil {
-		return nil, errdefs.Internalf(err, "expired holds")
+		return uuid.Nil, false, errdefs.Internalf(err, "next expired hold")
 	}
-	defer rows.Close()
-
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, errdefs.Internalf(err, "scan expired hold")
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errdefs.Internalf(err, "expired holds rows")
-	}
-	return ids, nil
+	return id, true, nil
 }
 
 // ListByParent returns the direct children of a transaction, oldest first.

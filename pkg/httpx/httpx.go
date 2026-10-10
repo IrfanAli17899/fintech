@@ -1,10 +1,12 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
@@ -93,4 +95,15 @@ func NoContent(w http.ResponseWriter, err error) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// WithTimeout bounds every request's context, so a stuck dependency (a lock
+// wait, a pool wait, a rail call) gives the connection back instead of holding
+// it until the client goes away.
+func WithTimeout(h http.Handler, d time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), d)
+		defer cancel()
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

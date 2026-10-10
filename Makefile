@@ -19,5 +19,7 @@ migrate-up:
 migrate-down:
 	migrate -path migrations -database "$(DB_URL)" down 1
 
+# -p 1: tests share a database; parallel packages race on rail outcomes.
+# Do not remove until each package gets its own database (testcontainers).
 test:
-	go test -count=1 -race ./...
+	go test -count=1 -race -p 1 ./...

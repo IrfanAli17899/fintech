@@ -7,7 +7,7 @@ import (
 
 	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/transport/http"
+	transporthttp "github.com/irfanali17899/fintech/internal/ledger/internal/transport/http"
 	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/scheduler"
@@ -36,7 +36,7 @@ func New(db *database.DB, rails ports.RailRegistry) *Module {
 		accounts: accSvc,
 		jobs: []*scheduler.Loop{
 			scheduler.New("expire-holds", time.Minute, ledgerSvc.ExpirerJob(500)),
-			scheduler.New("settlement", time.Minute, ledgerSvc.SettleJob(500)),
+			scheduler.New("outcomes", time.Minute, ledgerSvc.OutcomesJob(20)),
 		},
 		handlers: []interface{ RegisterRoutes(*http.ServeMux) }{
 			transporthttp.NewAccountHandler(accSvc),

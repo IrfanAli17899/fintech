@@ -37,9 +37,10 @@ var (
 	CodeRailFailed               = "RAIL_FAILED"
 	CodeRailNotReversible        = "RAIL_NOT_REVERSIBLE"
 	CodeRailManagedHold          = "RAIL_MANAGED_HOLD"
-	CodeRailPartialRefund        = "RAIL_PARTIAL_REFUND_UNSUPPORTED"
 	CodeInvalidRelation          = "INVALID_RELATION"
 	CodeRelationWithoutParent    = "RELATION_WITHOUT_PARENT"
+	CodeRailCannotCancel         = "RAIL_CANNOT_CANCEL"
+	CodeHoldAlreadySettling      = "HOLD_ALREADY_SETTLING"
 
 	// idempotency
 	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
@@ -176,9 +177,14 @@ func ErrRailManagedHold(id uuid.UUID, rail string) *errdefs.Error {
 		"transaction %s is held by %s; only the rail can settle or cancel it", id, rail)
 }
 
-func ErrRailPartialRefund(id uuid.UUID, rail string) *errdefs.Error {
-	return errdefs.Validationf(CodeRailPartialRefund,
-		"transaction %s was sent via %s; only a full reversal is supported", id, rail)
+func ErrRailCannotCancel(id uuid.UUID, rail string) *errdefs.Error {
+	return errdefs.Validationf(CodeRailCannotCancel,
+		"transaction %s is pending on %s, which does not support cancellation; it will settle or bounce", id, rail)
+}
+
+func ErrHoldAlreadySettling(id uuid.UUID, rail string) *errdefs.Error {
+	return errdefs.Conflictf(CodeHoldAlreadySettling,
+		"transaction %s has already been settled or bounced by %s; it can no longer be cancelled", id, rail)
 }
 
 // Internal signal from the repo that the key already exists; the service

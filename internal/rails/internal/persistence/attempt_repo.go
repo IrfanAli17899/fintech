@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/rails/internal/domain"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
@@ -36,6 +36,44 @@ func (r *AttemptRepo) Create(ctx context.Context, a domain.Attempt) error {
 	return nil
 }
 
+// Lock loads an attempt and holds its row lock until the transaction ends, so
+// every decision about one attempt is serialised. Tx-bound only.
+func (r *AttemptRepo) Lock(ctx context.Context, ref string) (*domain.Attempt, error) {
+	var a domain.Attempt
+	err := scanAttempt(r.db.QueryRowContext(ctx,
+		`SELECT `+attemptColumns+` FROM rails.attempts WHERE ref = $1 FOR UPDATE`, ref), &a)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrAttemptNotFound
+	}
+	if err != nil {
+		return nil, errdefs.Internalf(err, "lock rail attempt")
+	}
+	return &a, nil
+}
+
+// ByRefs loads attempts by ref, keyed by ref.
+func (r *AttemptRepo) ByRefs(ctx context.Context, refs []string) (map[string]domain.Attempt, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+attemptColumns+` FROM rails.attempts WHERE ref = ANY($1)`, refs)
+	if err != nil {
+		return nil, errdefs.Internalf(err, "attempts by refs")
+	}
+	defer rows.Close()
+
+	out := make(map[string]domain.Attempt, len(refs))
+	for rows.Next() {
+		var a domain.Attempt
+		if err := scanAttempt(rows, &a); err != nil {
+			return nil, errdefs.Internalf(err, "scan attempt")
+		}
+		out[a.Ref] = a
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "attempts by refs rows")
+	}
+	return out, nil
+}
+
 func (r *AttemptRepo) Get(ctx context.Context, ref string) (*domain.Attempt, error) {
 	var a domain.Attempt
 	err := scanAttempt(r.db.QueryRowContext(ctx,
@@ -64,17 +102,12 @@ func (r *AttemptRepo) Transition(ctx context.Context, ref string, from, to domai
 	return n == 1, nil
 }
 
-// Due returns initiated attempts whose settle_after has passed, skipping rows
-// another worker holds. Tx-bound only.
-func (r *AttemptRepo) Due(ctx context.Context, now time.Time, limit int) ([]domain.Attempt, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+attemptColumns+` FROM rails.attempts
-		WHERE state = 'initiated' AND settle_after <= $1
-		ORDER BY settle_after
-		LIMIT $2
-		FOR UPDATE SKIP LOCKED`, now, limit)
+// ByTransactions loads attempts for the given ledger transaction ids.
+func (r *AttemptRepo) ByTransactions(ctx context.Context, ids []uuid.UUID) ([]domain.Attempt, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+attemptColumns+` FROM rails.attempts WHERE transaction_id = ANY($1)`, ids)
 	if err != nil {
-		return nil, errdefs.Internalf(err, "due rail attempts")
+		return nil, errdefs.Internalf(err, "attempts by transactions")
 	}
 	defer rows.Close()
 
@@ -82,12 +115,12 @@ func (r *AttemptRepo) Due(ctx context.Context, now time.Time, limit int) ([]doma
 	for rows.Next() {
 		var a domain.Attempt
 		if err := scanAttempt(rows, &a); err != nil {
-			return nil, errdefs.Internalf(err, "scan rail attempt")
+			return nil, errdefs.Internalf(err, "scan attempt")
 		}
 		out = append(out, a)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errdefs.Internalf(err, "due rail attempts rows")
+		return nil, errdefs.Internalf(err, "attempts by transactions rows")
 	}
 	return out, nil
 }
