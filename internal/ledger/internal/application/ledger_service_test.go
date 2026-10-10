@@ -1,4 +1,4 @@
-package services_test
+package application_test
 
 import (
 	"context"
@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/ledger/api"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/internal/rails"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
@@ -31,9 +31,9 @@ const (
 
 type fixture struct {
 	ctx      context.Context
-	ledger   *services.LedgerService
-	accounts *services.AccountService
-	admin    *services.AdminService
+	ledger   *application.LedgerService
+	accounts *application.AccountService
+	admin    *application.AdminService
 }
 
 func setup(t *testing.T) fixture {
@@ -56,19 +56,19 @@ func connectTestDB(t *testing.T) *database.DB {
 	return db
 }
 
-func setupWith(t *testing.T, db *database.DB, reg api.RailRegistry) fixture {
+func setupWith(t *testing.T, db *database.DB, reg ports.RailRegistry) fixture {
 	t.Helper()
-	acc := repositories.NewAccountRepo(db.DB)
-	txn := repositories.NewTransactionRepo(db.DB)
-	ent := repositories.NewEntryRepo(db.DB)
-	bal := repositories.NewBalanceRepo(db.DB)
-	idem := repositories.NewIdempotencyRepo(db.DB)
+	acc := persistence.NewAccountRepo(db.DB)
+	txn := persistence.NewTransactionRepo(db.DB)
+	ent := persistence.NewEntryRepo(db.DB)
+	bal := persistence.NewBalanceRepo(db.DB)
+	idem := persistence.NewIdempotencyRepo(db.DB)
 
 	return fixture{
 		ctx:      context.Background(),
-		ledger:   services.NewLedgerService(db, acc, txn, ent, bal, idem, reg),
-		accounts: services.NewAccountService(db, acc, bal, ent),
-		admin:    services.NewAdminService(db, bal),
+		ledger:   application.NewLedgerService(db, acc, txn, ent, bal, idem, reg),
+		accounts: application.NewAccountService(db, acc, bal, ent),
+		admin:    application.NewAdminService(db, bal),
 	}
 }
 
@@ -367,7 +367,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		},
 	})
 
-	r1, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 50, IdempotencyKey: uuid.NewString()})
+	r1, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 50, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if r1.ParentID == nil || *r1.ParentID != pay.ID {
 		t.Fatal("reversal not linked to original")
@@ -376,7 +376,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		t.Fatalf("shop after partial = %d, want 67", b.Posted)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	orig, err := f.ledger.GetTransaction(f.ctx, pay.ID)
@@ -391,7 +391,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		t.Fatalf("shop should be back to 0, got %d", b.Posted)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
@@ -406,7 +406,7 @@ func TestReverse_ExceedsOriginal(t *testing.T) {
 	f.post(t, transfer(cash, ali, 100, uuid.NewString()))
 	pay := f.post(t, transfer(ali, sara, 100, uuid.NewString()))
 
-	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 101, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 101, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
@@ -429,7 +429,7 @@ func TestReverse_ConcurrentPartialsCannotExceed(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 70, IdempotencyKey: uuid.NewString()})
+			_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 70, IdempotencyKey: uuid.NewString()})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -587,7 +587,7 @@ func TestCapture_Full(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	cap, replayed, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	cap, replayed, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if replayed || cap.Status != domain.TransactionStatusPosted || cap.ParentID == nil || *cap.ParentID != h.ID {
 		t.Fatalf("capture: %+v", cap)
@@ -619,7 +619,7 @@ func TestCapture_PartialKeepsRestReserved(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	cap, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	cap, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if cap.Total() != 300 {
 		t.Fatalf("capture total = %d, want 300", cap.Total())
@@ -649,7 +649,7 @@ func TestCapture_ExceedsHold(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 501, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 501, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeCaptureExceedsHold) {
 		t.Fatalf("want CAPTURE_EXCEEDS_HOLD, got %v", err)
 	}
@@ -666,11 +666,11 @@ func TestCapture_NotPending(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	posted := f.post(t, transfer(ali, shop, 100, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("capture posted: want TRANSACTION_NOT_PENDING, got %v", err)
 	}
-	_, _, err = f.ledger.Void(f.ctx, services.VoidCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("void posted: want TRANSACTION_NOT_PENDING, got %v", err)
 	}
@@ -684,7 +684,7 @@ func TestVoid_ReleasesHold(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	v, _, err := f.ledger.Void(f.ctx, services.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	v, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if v.ID != h.ID || v.Status != domain.TransactionStatusVoided {
 		t.Fatalf("void: %+v", v)
@@ -697,7 +697,7 @@ func TestVoid_ReleasesHold(t *testing.T) {
 		t.Fatalf("shop after void: %+v", s)
 	}
 	// capturing a voided hold is rejected
-	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("want TRANSACTION_NOT_PENDING, got %v", err)
 	}
@@ -713,9 +713,9 @@ func TestCapture_ReplayReturnsCapture(t *testing.T) {
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 	key := uuid.NewString()
 
-	first, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
+	first, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
 	must(t, err)
-	second, replayed, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
+	second, replayed, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
 	must(t, err)
 	if !replayed || second.ID != first.ID {
 		t.Fatalf("replay=%v same=%v", replayed, second.ID == first.ID)
@@ -742,7 +742,7 @@ func TestCapture_ConcurrentCapturesOnlyOneWins(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+			_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -773,9 +773,9 @@ func TestCapture_TwiceThenExhausted(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()}) // the rest
+	_, _, err = f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()}) // the rest
 	must(t, err)
 
 	holdNow, err := f.ledger.GetTransaction(f.ctx, h.ID)
@@ -790,7 +790,7 @@ func TestCapture_TwiceThenExhausted(t *testing.T) {
 	if s := f.balance(t, shop); s.Posted != 500 || s.PendingIn != 0 {
 		t.Fatalf("shop: %+v", s)
 	}
-	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("want TRANSACTION_NOT_PENDING, got %v", err)
 	}
@@ -805,9 +805,9 @@ func TestVoid_AfterPartialReleasesRest(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	_, _, err = f.ledger.Void(f.ctx, services.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	a := f.balance(t, ali)
@@ -874,7 +874,7 @@ func TestExpireHolds_PartiallyCapturedReleasesRest(t *testing.T) {
 	shop := f.account(t, domain.AccountLiability)
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, holdExpiring(ali, shop, 500, time.Now().Add(-time.Minute)))
-	_, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	_, err = f.ledger.ExpireHolds(f.ctx, time.Now(), 100)
@@ -958,8 +958,8 @@ func TestPost_InternalRailIsImmediate(t *testing.T) {
 func TestPost_DeferredRailLandsPending(t *testing.T) {
 	deferred := fakeRail{
 		name:  "fake",
-		props: api.RailProperties{SettlementDelay: 48 * time.Hour, CanBounce: true},
-		res:   api.RailInitiateResult{Ref: "prov-123", Settlement: api.SettlementDeferred},
+		props: ports.RailProperties{SettlementDelay: 48 * time.Hour, CanBounce: true},
+		res:   ports.RailInitiateResult{Ref: "prov-123", Settlement: ports.SettlementDeferred},
 	}
 	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": deferred})
 	cash := f.account(t, domain.AccountAsset)
@@ -1005,8 +1005,8 @@ func TestPost_RailFailureRejects(t *testing.T) {
 func TestReverse_IrreversibleRailRejected(t *testing.T) {
 	oneWay := fakeRail{
 		name:  "fake",
-		props: api.RailProperties{Instant: true, Reversible: false},
-		res:   api.RailInitiateResult{Ref: "r-1", Settlement: api.SettlementImmediate},
+		props: ports.RailProperties{Instant: true, Reversible: false},
+		res:   ports.RailInitiateResult{Ref: "r-1", Settlement: ports.SettlementImmediate},
 	}
 	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": oneWay})
 	cash := f.account(t, domain.AccountAsset)
@@ -1016,7 +1016,7 @@ func TestReverse_IrreversibleRailRejected(t *testing.T) {
 	x.Kind, x.Rail = kindTopup, "fake"
 	posted := f.post(t, x)
 
-	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1040,7 +1040,7 @@ func TestPost_RaastIsImmediateAndFinal(t *testing.T) {
 		t.Fatalf("ali: %+v", b)
 	}
 
-	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: got.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: got.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1163,7 +1163,7 @@ func TestSettleDue_SettledSwiftIsFinal(t *testing.T) {
 	if len(kids) != 1 {
 		t.Fatalf("children = %d", len(kids))
 	}
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: kids[0].ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: kids[0].ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1239,11 +1239,11 @@ func TestVoidAndCapture_RailManagedHoldRejected(t *testing.T) {
 	f := setup(t)
 	h := cardHold(t, f)
 
-	_, _, err := f.ledger.Void(f.ctx, services.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailManagedHold) {
 		t.Fatalf("void: want RAIL_MANAGED_HOLD, got %v", err)
 	}
-	_, _, err = f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailManagedHold) {
 		t.Fatalf("capture: want RAIL_MANAGED_HOLD, got %v", err)
 	}
@@ -1274,12 +1274,12 @@ func TestReverse_CardRefundIsFullOnlyAndCarriesRail(t *testing.T) {
 	}
 	posted := kids[0]
 
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, Amount: 1000, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, Amount: 1000, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailPartialRefund) {
 		t.Fatalf("want RAIL_PARTIAL_REFUND_UNSUPPORTED, got %v", err)
 	}
 
-	refund, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	refund, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if refund.Rail != "card" || refund.RailRef != posted.RailRef {
 		t.Fatalf("refund must be a card refund on the same ref: %+v", refund)
@@ -1290,8 +1290,8 @@ func TestReverse_CardRefundIsFullOnlyAndCarriesRail(t *testing.T) {
 func TestReverse_RailRefusalRollsBack(t *testing.T) {
 	refusing := fakeRail{
 		name:   "fake",
-		props:  api.RailProperties{Instant: true, Reversible: true},
-		res:    api.RailInitiateResult{Ref: "r-1", Settlement: api.SettlementImmediate},
+		props:  ports.RailProperties{Instant: true, Reversible: true},
+		res:    ports.RailInitiateResult{Ref: "r-1", Settlement: ports.SettlementImmediate},
 		revErr: errors.New("provider refused"),
 	}
 	f := setupWith(t, connectTestDB(t), fakeRegistry{"internal": instantInternal, "fake": refusing})
@@ -1302,7 +1302,7 @@ func TestReverse_RailRefusalRollsBack(t *testing.T) {
 	x.Kind, x.Rail = kindTopup, "fake"
 	posted := f.post(t, x)
 
-	_, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("want RAIL_FAILED, got %v", err)
 	}
@@ -1340,7 +1340,7 @@ func TestReverse_ChildCarriesCallerKindAndRelation(t *testing.T) {
 	f.post(t, transfer(cash, ali, 100, uuid.NewString()))
 	pay := f.post(t, transfer(ali, sara, 100, uuid.NewString()))
 
-	rev, _, err := f.ledger.Reverse(f.ctx, services.ReverseCommand{
+	rev, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{
 		Kind: "pharmacy_return", OriginalID: pay.ID, IdempotencyKey: uuid.NewString(),
 	})
 	must(t, err)
@@ -1363,7 +1363,7 @@ func TestSummary_TracksCapturesAndReversals(t *testing.T) {
 		t.Fatalf("fresh summary: %+v", h.Summary)
 	}
 
-	cap, _, err := f.ledger.Capture(f.ctx, services.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	cap, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
 	must(t, err)
@@ -1371,7 +1371,7 @@ func TestSummary_TracksCapturesAndReversals(t *testing.T) {
 		t.Fatalf("after capture: %+v", got.Summary)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, services.ReverseCommand{Kind: string(kindRefund), OriginalID: cap.ID, Amount: 100, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: cap.ID, Amount: 100, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	capNow, err := f.ledger.GetTransaction(f.ctx, cap.ID)
 	must(t, err)

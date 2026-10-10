@@ -1,20 +1,20 @@
-package services
+package application
 
 import (
 	"context"
 	"database/sql"
 
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 
 type AdminService struct {
 	txRunner    database.TxRunner
-	balanceRepo *repositories.BalanceRepo
+	balanceRepo *persistence.BalanceRepo
 }
 
-func NewAdminService(txRunner database.TxRunner, balanceRepo *repositories.BalanceRepo) *AdminService {
+func NewAdminService(txRunner database.TxRunner, balanceRepo *persistence.BalanceRepo) *AdminService {
 	return &AdminService{txRunner, balanceRepo}
 }
 

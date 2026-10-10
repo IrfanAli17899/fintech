@@ -1,18 +1,18 @@
-package handlers
+package transporthttp
 
 import (
 	"net/http"
 
+	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 
 type AccountHandler struct {
-	accSvc *services.AccountService
+	accSvc *application.AccountService
 }
 
-func NewAccountHandler(accSvc *services.AccountService) *AccountHandler {
+func NewAccountHandler(accSvc *application.AccountService) *AccountHandler {
 	return &AccountHandler{accSvc}
 }
 

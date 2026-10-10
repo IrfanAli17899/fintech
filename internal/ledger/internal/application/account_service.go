@@ -1,4 +1,4 @@
-package services
+package application
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 
@@ -23,16 +23,16 @@ type History struct {
 
 type AccountService struct {
 	txRunner    database.TxRunner
-	accRepo     *repositories.AccountRepo
-	balanceRepo *repositories.BalanceRepo
-	entryRepo   *repositories.EntryRepo
+	accRepo     *persistence.AccountRepo
+	balanceRepo *persistence.BalanceRepo
+	entryRepo   *persistence.EntryRepo
 }
 
 func NewAccountService(
 	txRunner database.TxRunner,
-	accRepo *repositories.AccountRepo,
-	balanceRepo *repositories.BalanceRepo,
-	entryRepo *repositories.EntryRepo,
+	accRepo *persistence.AccountRepo,
+	balanceRepo *persistence.BalanceRepo,
+	entryRepo *persistence.EntryRepo,
 ) *AccountService {
 	return &AccountService{txRunner, accRepo, balanceRepo, entryRepo}
 }

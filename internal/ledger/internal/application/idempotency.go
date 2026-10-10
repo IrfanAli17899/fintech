@@ -1,11 +1,11 @@
-package services
+package application
 
 import (
 	"context"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
@@ -19,7 +19,7 @@ type replay struct {
 // request was already completed, and an error when the key was reused with a
 // different payload. Must be called on a tx-bound repo; the caller links the
 // key to its result with SetResource before commit.
-func claimKey(ctx context.Context, keys *repositories.IdempotencyRepo, key, hash string, rt domain.ResourceType) (*replay, error) {
+func claimKey(ctx context.Context, keys *persistence.IdempotencyRepo, key, hash string, rt domain.ResourceType) (*replay, error) {
 	_, err := keys.Insert(ctx, key, hash, rt)
 	if err == nil {
 		return nil, nil

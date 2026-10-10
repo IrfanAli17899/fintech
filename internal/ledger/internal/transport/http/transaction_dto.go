@@ -1,11 +1,11 @@
-package handlers
+package transporthttp
 
 import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
 )
 
 // ---- requests ----
@@ -50,8 +50,8 @@ type reverseTransactionRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func (r reverseTransactionRequest) toCommand(originalID uuid.UUID) services.ReverseCommand {
-	return services.ReverseCommand{
+func (r reverseTransactionRequest) toCommand(originalID uuid.UUID) application.ReverseCommand {
+	return application.ReverseCommand{
 		Kind:           r.Kind,
 		OriginalID:     originalID,
 		Amount:         r.Amount,
@@ -64,8 +64,8 @@ type captureTransactionRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func (r captureTransactionRequest) toCommand(holdID uuid.UUID) services.CaptureCommand {
-	return services.CaptureCommand{HoldID: holdID, Amount: r.Amount, IdempotencyKey: r.IdempotencyKey}
+func (r captureTransactionRequest) toCommand(holdID uuid.UUID) application.CaptureCommand {
+	return application.CaptureCommand{HoldID: holdID, Amount: r.Amount, IdempotencyKey: r.IdempotencyKey}
 }
 
 type voidTransactionRequest struct {
@@ -73,8 +73,8 @@ type voidTransactionRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func (r voidTransactionRequest) toCommand(holdID uuid.UUID) services.VoidCommand {
-	return services.VoidCommand{HoldID: holdID, Reason: r.Reason, IdempotencyKey: r.IdempotencyKey}
+func (r voidTransactionRequest) toCommand(holdID uuid.UUID) application.VoidCommand {
+	return application.VoidCommand{HoldID: holdID, Reason: r.Reason, IdempotencyKey: r.IdempotencyKey}
 }
 
 // ---- responses ----

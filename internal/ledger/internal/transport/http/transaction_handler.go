@@ -1,17 +1,17 @@
-package handlers
+package transporthttp
 
 import (
 	"net/http"
 
-	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 
 type TransactionHandler struct {
-	ledgerSvc *services.LedgerService
+	ledgerSvc *application.LedgerService
 }
 
-func NewTransactionHandler(ledgerSvc *services.LedgerService) *TransactionHandler {
+func NewTransactionHandler(ledgerSvc *application.LedgerService) *TransactionHandler {
 	return &TransactionHandler{ledgerSvc}
 }
 

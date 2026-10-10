@@ -3,15 +3,15 @@ package rails
 import (
 	"time"
 
-	"github.com/irfanali17899/fintech/internal/ledger/api"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/internal/rails/internal/adapters"
-	"github.com/irfanali17899/fintech/internal/rails/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/rails/internal/persistence"
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 
 // New returns the registry of available rails.
-func New(db *database.DB) api.RailRegistry {
-	attempts := repositories.NewAttemptRepo(db.DB)
+func New(db *database.DB) ports.RailRegistry {
+	attempts := persistence.NewAttemptRepo(db.DB)
 
 	return adapters.NewRegistry(
 		db,

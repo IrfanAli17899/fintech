@@ -1,4 +1,4 @@
-package services
+package application
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/pkg/database"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
@@ -41,22 +41,22 @@ type ReverseCommand struct {
 
 type LedgerService struct {
 	txRunner        database.TxRunner
-	accRepo         *repositories.AccountRepo
-	transactionRepo *repositories.TransactionRepo
-	entryRepo       *repositories.EntryRepo
-	balanceRepo     *repositories.BalanceRepo
-	idemRepo        *repositories.IdempotencyRepo
-	rails           api.RailRegistry
+	accRepo         *persistence.AccountRepo
+	transactionRepo *persistence.TransactionRepo
+	entryRepo       *persistence.EntryRepo
+	balanceRepo     *persistence.BalanceRepo
+	idemRepo        *persistence.IdempotencyRepo
+	rails           ports.RailRegistry
 }
 
 func NewLedgerService(
 	txRunner database.TxRunner,
-	accRepo *repositories.AccountRepo,
-	transactionRepo *repositories.TransactionRepo,
-	entryRepo *repositories.EntryRepo,
-	balanceRepo *repositories.BalanceRepo,
-	idemRepo *repositories.IdempotencyRepo,
-	rails api.RailRegistry,
+	accRepo *persistence.AccountRepo,
+	transactionRepo *persistence.TransactionRepo,
+	entryRepo *persistence.EntryRepo,
+	balanceRepo *persistence.BalanceRepo,
+	idemRepo *persistence.IdempotencyRepo,
+	rails ports.RailRegistry,
 ) *LedgerService {
 	return &LedgerService{
 		txRunner:        txRunner,
@@ -356,7 +356,7 @@ func (s *LedgerService) SettleDue(ctx context.Context, now time.Time, batchSize 
 			continue
 		}
 
-		var bounce *api.RailBounce
+		var bounce *ports.RailBounce
 		switch err := rail.Settle(ctx, d.Ref); {
 		case err == nil:
 		case errors.As(err, &bounce):
@@ -448,11 +448,11 @@ func (s *LedgerService) Children(ctx context.Context, parentID uuid.UUID) ([]dom
 
 // txRepos is the set of repositories bound to one database transaction.
 type txRepos struct {
-	accounts *repositories.AccountRepo
-	txns     *repositories.TransactionRepo
-	entries  *repositories.EntryRepo
-	balances *repositories.BalanceRepo
-	keys     *repositories.IdempotencyRepo
+	accounts *persistence.AccountRepo
+	txns     *persistence.TransactionRepo
+	entries  *persistence.EntryRepo
+	balances *persistence.BalanceRepo
+	keys     *persistence.IdempotencyRepo
 }
 
 func (s *LedgerService) repos(tx *sql.Tx) txRepos {
@@ -529,14 +529,14 @@ func (s *LedgerService) initiateRail(ctx context.Context, t *domain.Transaction,
 	if !ok {
 		return domain.ErrUnknownRail(t.Rail)
 	}
-	res, err := rail.Initiate(ctx, api.RailInitiateRequest{
+	res, err := rail.Initiate(ctx, ports.RailInitiateRequest{
 		TransactionID: t.ID, Amount: t.Total(), Currency: currency, Kind: string(t.Kind),
 	})
 	if err != nil {
 		return domain.ErrRailFailed(t.Rail, "initiate", err)
 	}
 	t.RailRef = res.Ref
-	if res.Settlement == api.SettlementDeferred {
+	if res.Settlement == ports.SettlementDeferred {
 		t.Status = domain.TransactionStatusPending
 		if t.ExpiresAt == nil {
 			exp := time.Now().Add(rail.Properties().SettlementDelay + domain.SettlementGrace)
@@ -589,8 +589,8 @@ func (s *LedgerService) write(ctx context.Context, r txRepos, t domain.Transacti
 	return created, nil
 }
 
-// loadTransaction works with either pool-bound or tx-bound repositories.
-func (s *LedgerService) loadTransaction(ctx context.Context, txns *repositories.TransactionRepo, ents *repositories.EntryRepo, id uuid.UUID) (*domain.Transaction, error) {
+// loadTransaction works with either pool-bound or tx-bound persistence.
+func (s *LedgerService) loadTransaction(ctx context.Context, txns *persistence.TransactionRepo, ents *persistence.EntryRepo, id uuid.UUID) (*domain.Transaction, error) {
 	t, err := txns.GetByID(ctx, id)
 	if err != nil {
 		return nil, err

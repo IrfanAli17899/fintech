@@ -7,28 +7,28 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/ledger/api"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/internal/rails/internal/adapters"
 	"github.com/irfanali17899/fintech/internal/rails/internal/domain"
-	"github.com/irfanali17899/fintech/internal/rails/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/rails/internal/persistence"
 )
 
-func setupSwift(t *testing.T) (*adapters.SwiftRail, *repositories.AttemptRepo) {
+func setupSwift(t *testing.T) (*adapters.SwiftRail, *persistence.AttemptRepo) {
 	t.Helper()
 	db := connectTestDB(t) // extract from card_test's setup if it's inline there
-	repo := repositories.NewAttemptRepo(db.DB)
+	repo := persistence.NewAttemptRepo(db.DB)
 	return adapters.NewSwiftRail(repo, 72*time.Hour), repo
 }
 
 func initiateSwift(t *testing.T, s *adapters.SwiftRail, amount int64) string {
 	t.Helper()
-	res, err := s.Initiate(context.Background(), api.RailInitiateRequest{
+	res, err := s.Initiate(context.Background(), ports.RailInitiateRequest{
 		TransactionID: uuid.New(), Amount: amount, Currency: "USD", Kind: "topup",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Settlement != api.SettlementDeferred {
+	if res.Settlement != ports.SettlementDeferred {
 		t.Fatalf("settlement = %s", res.Settlement)
 	}
 	return res.Ref
@@ -53,7 +53,7 @@ func TestSwift_BouncesMagicAmount(t *testing.T) {
 	ref := initiateSwift(t, s, 1099)
 	ctx := context.Background()
 
-	var bounce *api.RailBounce
+	var bounce *ports.RailBounce
 	if err := s.Settle(ctx, ref); !errors.As(err, &bounce) {
 		t.Fatalf("want RailBounce, got %v", err)
 	}

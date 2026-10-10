@@ -5,29 +5,29 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/irfanali17899/fintech/internal/ledger/api"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/internal/rails/internal/domain"
-	"github.com/irfanali17899/fintech/internal/rails/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/rails/internal/persistence"
 )
 
 // SwiftRail simulates a correspondent-banking wire: slow, final, and able to
 // fail before settlement. Amounts ending in 99 bounce, so tests can trigger it.
 type SwiftRail struct {
-	attempts *repositories.AttemptRepo
+	attempts *persistence.AttemptRepo
 	delay    time.Duration
 }
 
-func NewSwiftRail(attempts *repositories.AttemptRepo, delay time.Duration) *SwiftRail {
+func NewSwiftRail(attempts *persistence.AttemptRepo, delay time.Duration) *SwiftRail {
 	return &SwiftRail{attempts: attempts, delay: delay}
 }
 
 func (s *SwiftRail) Name() string { return "swift" }
 
-func (s *SwiftRail) Properties() api.RailProperties {
-	return api.RailProperties{Instant: false, Reversible: false, SettlementDelay: s.delay, CanBounce: true}
+func (s *SwiftRail) Properties() ports.RailProperties {
+	return ports.RailProperties{Instant: false, Reversible: false, SettlementDelay: s.delay, CanBounce: true}
 }
 
-func (s *SwiftRail) Initiate(ctx context.Context, req api.RailInitiateRequest) (api.RailInitiateResult, error) {
+func (s *SwiftRail) Initiate(ctx context.Context, req ports.RailInitiateRequest) (ports.RailInitiateResult, error) {
 	ref := "SWIFT-" + req.TransactionID.String()
 	err := s.attempts.Create(ctx, domain.Attempt{
 		Ref:           ref,
@@ -38,9 +38,9 @@ func (s *SwiftRail) Initiate(ctx context.Context, req api.RailInitiateRequest) (
 		SettleAfter:   time.Now().Add(s.delay),
 	})
 	if err != nil {
-		return api.RailInitiateResult{}, err
+		return ports.RailInitiateResult{}, err
 	}
-	return api.RailInitiateResult{Ref: ref, Settlement: api.SettlementDeferred}, nil
+	return ports.RailInitiateResult{Ref: ref, Settlement: ports.SettlementDeferred}, nil
 }
 
 // Settle finalises the wire, or bounces it when the simulated correspondent
@@ -59,7 +59,7 @@ func (s *SwiftRail) Settle(ctx context.Context, ref string) error {
 		if !ok {
 			return fmt.Errorf("bounce %s: %w", ref, domain.ErrWrongState)
 		}
-		return &api.RailBounce{Reason: reason}
+		return &ports.RailBounce{Reason: reason}
 	}
 	ok, err := s.attempts.Transition(ctx, ref, domain.AttemptInitiated, domain.AttemptSettled, nil)
 	if err != nil {

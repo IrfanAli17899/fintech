@@ -8,17 +8,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/ledger/api"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/internal/rails/internal/adapters"
 	"github.com/irfanali17899/fintech/internal/rails/internal/domain"
-	"github.com/irfanali17899/fintech/internal/rails/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/rails/internal/persistence"
 	"github.com/irfanali17899/fintech/pkg/database"
 )
 
-func setup(t *testing.T) (*adapters.CardRail, *repositories.AttemptRepo) {
+func setup(t *testing.T) (*adapters.CardRail, *persistence.AttemptRepo) {
 	t.Helper()
 	db := connectTestDB(t)
-	repo := repositories.NewAttemptRepo(db.DB)
+	repo := persistence.NewAttemptRepo(db.DB)
 	return adapters.NewCardRail(repo, 48*time.Hour), repo
 }
 
@@ -38,7 +38,7 @@ func connectTestDB(t *testing.T) *database.DB {
 
 func initiateCard(t *testing.T, c *adapters.CardRail) string {
 	t.Helper()
-	res, err := c.Initiate(context.Background(), api.RailInitiateRequest{
+	res, err := c.Initiate(context.Background(), ports.RailInitiateRequest{
 		TransactionID: uuid.New(), Amount: 1000, Currency: "PKR", Kind: "topup",
 	})
 	if err != nil {

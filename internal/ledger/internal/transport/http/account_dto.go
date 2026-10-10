@@ -1,11 +1,11 @@
-package handlers
+package transporthttp
 
 import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
@@ -115,7 +115,7 @@ func toBalanceResponse(b *domain.Balance) *balanceResponse {
 	}
 }
 
-func toHistoryResponse(h *services.History) *historyResponse {
+func toHistoryResponse(h *application.History) *historyResponse {
 	if h == nil {
 		return nil
 	}

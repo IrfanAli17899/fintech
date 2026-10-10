@@ -1,17 +1,17 @@
-package handlers
+package transporthttp
 
 import (
 	"net/http"
 
-	"github.com/irfanali17899/fintech/internal/ledger/internal/services"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 
 type AdminHandler struct {
-	adminSvc *services.AdminService
+	adminSvc *application.AdminService
 }
 
-func NewAdminHandler(adminSvc *services.AdminService) *AdminHandler {
+func NewAdminHandler(adminSvc *application.AdminService) *AdminHandler {
 	return &AdminHandler{adminSvc: adminSvc}
 }
 

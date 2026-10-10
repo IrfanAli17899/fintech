@@ -36,8 +36,8 @@ var (
 	CodeUnknownRail              = "UNKNOWN_RAIL"
 	CodeRailFailed               = "RAIL_FAILED"
 	CodeRailNotReversible        = "RAIL_NOT_REVERSIBLE"
-		CodeRailManagedHold          = "RAIL_MANAGED_HOLD"
-		CodeRailPartialRefund        = "RAIL_PARTIAL_REFUND_UNSUPPORTED"
+	CodeRailManagedHold          = "RAIL_MANAGED_HOLD"
+	CodeRailPartialRefund        = "RAIL_PARTIAL_REFUND_UNSUPPORTED"
 	CodeInvalidRelation          = "INVALID_RELATION"
 	CodeRelationWithoutParent    = "RELATION_WITHOUT_PARENT"
 

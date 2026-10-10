@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/irfanali17899/fintech/internal/ledger/api"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 )
 
 var ErrNotReversible = errors.New("rtp rail: transfers are final and cannot be reversed")
@@ -23,17 +23,17 @@ func NewRTPRail(name, currency string) *RTPRail {
 
 func (r *RTPRail) Name() string { return r.name }
 
-func (r *RTPRail) Properties() api.RailProperties {
-	return api.RailProperties{Instant: true, Reversible: false}
+func (r *RTPRail) Properties() ports.RailProperties {
+	return ports.RailProperties{Instant: true, Reversible: false}
 }
 
-func (r *RTPRail) Initiate(_ context.Context, req api.RailInitiateRequest) (api.RailInitiateResult, error) {
+func (r *RTPRail) Initiate(_ context.Context, req ports.RailInitiateRequest) (ports.RailInitiateResult, error) {
 	if req.Currency != r.currency {
-		return api.RailInitiateResult{}, fmt.Errorf("%s rail only carries %s, got %s", r.name, r.currency, req.Currency)
+		return ports.RailInitiateResult{}, fmt.Errorf("%s rail only carries %s, got %s", r.name, r.currency, req.Currency)
 	}
-	return api.RailInitiateResult{
+	return ports.RailInitiateResult{
 		Ref:        strings.ToUpper(r.name) + "-" + req.TransactionID.String(),
-		Settlement: api.SettlementImmediate,
+		Settlement: ports.SettlementImmediate,
 	}, nil
 }
 

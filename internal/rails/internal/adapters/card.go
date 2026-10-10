@@ -5,29 +5,29 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/irfanali17899/fintech/internal/ledger/api"
+	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/internal/rails/internal/domain"
-	"github.com/irfanali17899/fintech/internal/rails/internal/repositories"
+	"github.com/irfanali17899/fintech/internal/rails/internal/persistence"
 )
 
 // CardRail simulates card acquiring: authorization now, settlement after a
 // delay, chargebacks possible after settlement.
 type CardRail struct {
-	attempts *repositories.AttemptRepo
+	attempts *persistence.AttemptRepo
 	delay    time.Duration
 }
 
-func NewCardRail(attempts *repositories.AttemptRepo, delay time.Duration) *CardRail {
+func NewCardRail(attempts *persistence.AttemptRepo, delay time.Duration) *CardRail {
 	return &CardRail{attempts: attempts, delay: delay}
 }
 
 func (c *CardRail) Name() string { return "card" }
 
-func (c *CardRail) Properties() api.RailProperties {
-	return api.RailProperties{Instant: false, Reversible: true, SettlementDelay: c.delay, CanBounce: false}
+func (c *CardRail) Properties() ports.RailProperties {
+	return ports.RailProperties{Instant: false, Reversible: true, SettlementDelay: c.delay, CanBounce: false}
 }
 
-func (c *CardRail) Initiate(ctx context.Context, req api.RailInitiateRequest) (api.RailInitiateResult, error) {
+func (c *CardRail) Initiate(ctx context.Context, req ports.RailInitiateRequest) (ports.RailInitiateResult, error) {
 	ref := "CARD-" + req.TransactionID.String()
 	err := c.attempts.Create(ctx, domain.Attempt{
 		Ref:           ref,
@@ -38,9 +38,9 @@ func (c *CardRail) Initiate(ctx context.Context, req api.RailInitiateRequest) (a
 		SettleAfter:   time.Now().Add(c.delay),
 	})
 	if err != nil {
-		return api.RailInitiateResult{}, err
+		return ports.RailInitiateResult{}, err
 	}
-	return api.RailInitiateResult{Ref: ref, Settlement: api.SettlementDeferred}, nil
+	return ports.RailInitiateResult{Ref: ref, Settlement: ports.SettlementDeferred}, nil
 }
 
 func (c *CardRail) Settle(ctx context.Context, ref string) error {
