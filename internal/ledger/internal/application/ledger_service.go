@@ -12,6 +12,7 @@ import (
 	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 	"github.com/irfanali17899/fintech/internal/ledger/ports"
 	"github.com/irfanali17899/fintech/pkg/database"
+	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
 // System is set only by the outcome worker; it lets a capture or void act on
@@ -354,7 +355,12 @@ func (s *LedgerService) voidLocked(ctx context.Context, r txRepos, cmd VoidComma
 	}
 
 	if h.RailBacked() && !cmd.System {
-		// checked before the key is linked, so a refusal never spends it
+		// checked before the key is linked, so a refusal never spends it.
+		// A pending refund child is a rail.Reverse in flight, which no rail
+		// can withdraw; it settles or is refused.
+		if h.Relation != nil && *h.Relation == domain.RelationReverses {
+			return nil, false, domain.ErrRailCannotCancel(h.ID, h.Rail)
+		}
 		if rail, ok := s.rails.Get(h.Rail); !ok || !rail.Properties().CanCancel {
 			return nil, false, domain.ErrRailCannotCancel(h.ID, h.Rail)
 		}
@@ -383,6 +389,60 @@ func (s *LedgerService) voidLocked(ctx context.Context, r txRepos, cmd VoidComma
 	h.Status = domain.TransactionStatusVoided
 	h.StatusReason = reason
 	return h, false, r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
+}
+
+// postPending settles a pending refund child in place: its reservation is
+// released and its entries count as posted, on the same row. Only refund
+// children use it. They never have children of their own, so unlike a hold
+// settled through captures, no sum has to skip a posted parent. Idempotent on
+// key, so an outcome re-applied after a crash before its ack is a replay.
+func (s *LedgerService) postPending(ctx context.Context, id uuid.UUID, key string) (*domain.Transaction, bool, error) {
+	var (
+		posted   *domain.Transaction
+		replayed bool
+	)
+	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+		r := s.repos(tx)
+
+		rp, err := claimKey(ctx, r.keys, key, domain.HashOf("post-pending", id.String()), domain.ResourceTransaction)
+		if err != nil {
+			return err
+		}
+		if rp != nil {
+			posted, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			replayed = true
+			return err
+		}
+
+		h, err := s.lockPending(ctx, r, id)
+		if err != nil {
+			return err
+		}
+		if h.Relation == nil || *h.Relation != domain.RelationReverses {
+			return errdefs.Internalf(nil, "post pending: %s is not a refund child", h.ID)
+		}
+
+		// releaseReservation locks the balance rows; they stay locked for Apply
+		if err := s.releaseReservation(ctx, r, pendingSums(*h)); err != nil {
+			return err
+		}
+		at, err := r.txns.MarkPosted(ctx, h.ID)
+		if err != nil {
+			return err
+		}
+		h.Status, h.PostedAt = domain.TransactionStatusPosted, &at
+		for acc, sums := range h.SumsByAccount() {
+			if err := r.balances.Apply(ctx, acc, sums); err != nil {
+				return err
+			}
+		}
+		posted = h
+		return r.keys.SetResource(ctx, key, h.ID)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return posted, replayed, nil
 }
 
 // cancelAtRail asks the rail to withdraw a pending transfer, outside any lock.
@@ -599,7 +659,7 @@ func (s *LedgerService) write(ctx context.Context, r txRepos, t domain.Transacti
 			return nil, err
 		}
 	}
-	created.Summary = domain.TransactionSummary{Total: created.Total(), Remaining: created.Total()}
+	created.Summary = domain.TransactionSummary{Total: created.Total(), Remaining: created.Total(), Settlement: string(created.Status)}
 	return created, nil
 }
 

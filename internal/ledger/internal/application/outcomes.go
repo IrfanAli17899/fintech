@@ -120,7 +120,7 @@ func (s *LedgerService) applyOutcome(ctx context.Context, o ports.Outcome, st *O
 		}
 		switch o.Decision {
 		case ports.DecisionSettled:
-			_, _, err = s.Capture(ctx, CaptureCommand{HoldID: childID, IdempotencyKey: "refund-settle:" + o.Key, System: true})
+			_, _, err = s.postPending(ctx, childID, "refund-settle:"+o.Key)
 			st.Refunded++
 		case ports.DecisionBounced:
 			_, _, err = s.systemVoid(ctx, childID, "refund-refuse:"+o.Key, "refund refused: "+o.Reason)

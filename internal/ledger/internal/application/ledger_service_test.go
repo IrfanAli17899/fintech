@@ -1526,6 +1526,140 @@ func TestReverse_ReplayAfterRailTimeoutAsksAgain(t *testing.T) {
 	f.verifyClean(t)
 }
 
+// ---- story 21b: refund settlement ----
+
+// settledCardPayment returns the posted capture child of a settled card topup
+// and the liability account it credited.
+func settledCardPayment(t *testing.T, f fixture) (*domain.Transaction, uuid.UUID) {
+	t.Helper()
+	h := cardHold(t, f)
+	f.applyAll(t, time.Now().Add(72*time.Hour))
+	kids, err := f.ledger.Children(f.ctx, h.ID)
+	must(t, err)
+	if len(kids) != 1 {
+		t.Fatalf("children = %d", len(kids))
+	}
+	return &kids[0], h.Entries[1].AccountID
+}
+
+func TestRefund_SettlesInPlace(t *testing.T) {
+	f := setup(t)
+	f.drain(t)
+	settled, _ := settledCardPayment(t, f)
+
+	r, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 2000, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if st := f.applyAll(t, time.Now()); st.Refunded != 1 || st.Diverged != 0 {
+		t.Fatalf("%+v", st)
+	}
+
+	got, err := f.ledger.GetTransaction(f.ctx, r.ID)
+	must(t, err)
+	if got.Status != domain.TransactionStatusPosted || got.PostedAt == nil {
+		t.Fatalf("refund child must post in place: %+v", got)
+	}
+	if kids, _ := f.ledger.Children(f.ctx, r.ID); len(kids) != 0 {
+		t.Fatalf("refund child must have no children, has %d", len(kids))
+	}
+	f.verifyClean(t)
+}
+
+func TestRefund_SettledRefundsKeepCounting(t *testing.T) {
+	f := setup(t)
+	f.drain(t)
+	settled, ali := settledCardPayment(t, f)
+
+	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 4000, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	f.applyAll(t, time.Now())
+
+	// enough money that only the refund limit, not funds, can stop the next one
+	cash := f.account(t, domain.AccountAsset)
+	f.post(t, transfer(cash, ali, 10000, uuid.NewString()))
+
+	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1001, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
+		t.Fatalf("5000 settled, 4000 refunded: 1001 more must be rejected, got %v", err)
+	}
+	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err) // the remaining 1000 is still refundable
+	f.verifyClean(t)
+}
+
+func TestVoid_PendingRefundChildCannotBeCancelled(t *testing.T) {
+	f := setup(t)
+	f.drain(t)
+	settled, _ := settledCardPayment(t, f)
+
+	r, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 500, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: r.ID, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeRailCannotCancel) {
+		t.Fatalf("want RAIL_CANNOT_CANCEL, got %v", err)
+	}
+}
+
+func TestSummary_SettlementLabels(t *testing.T) {
+	f := setup(t)
+	f.drain(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 10000, uuid.NewString()))
+
+	label := func(id uuid.UUID) string {
+		t.Helper()
+		got, err := f.ledger.GetTransaction(f.ctx, id)
+		must(t, err)
+		return got.Summary.Settlement
+	}
+
+	card := cardHold(t, f)
+	f.applyAll(t, time.Now().Add(72*time.Hour))
+	if l := label(card.ID); l != "settled_via_children" {
+		t.Fatalf("settled card hold: %s", l)
+	}
+
+	partial := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: partial.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: partial.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if l := label(partial.ID); l != "partially_settled" {
+		t.Fatalf("partly captured then voided: %s", l)
+	}
+
+	cancelled := f.post(t, hold(ali, shop, 200, uuid.NewString()))
+	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: cancelled.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if l := label(cancelled.ID); l != "voided" {
+		t.Fatalf("voided with no captures: %s", l)
+	}
+
+	if l := label(f.post(t, transfer(ali, shop, 100, uuid.NewString())).ID); l != "posted" {
+		t.Fatalf("plain transfer: %s", l)
+	}
+}
+
+func TestHistory_CarriesPostedAt(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	f.post(t, hold(ali, shop, 300, uuid.NewString()))
+
+	h, err := f.accounts.History(f.ctx, ali, 0, 10)
+	must(t, err)
+	if len(h.Entries) != 2 {
+		t.Fatalf("entries = %d", len(h.Entries))
+	}
+	pending, posted := h.Entries[0], h.Entries[1] // newest first
+	if pending.PostedAt != nil || posted.PostedAt == nil {
+		t.Fatalf("pending posted_at=%v, posted posted_at=%v", pending.PostedAt, posted.PostedAt)
+	}
+}
+
 // ---- story 11b: kind is product-owned ----
 
 func TestPost_KindIsProductOwned(t *testing.T) {

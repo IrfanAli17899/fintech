@@ -113,6 +113,21 @@ func (r *TransactionRepo) MarkVoided(ctx context.Context, id uuid.UUID, reason *
 	return nil
 }
 
+// MarkPosted settles a pending transaction in place and returns posted_at.
+func (r *TransactionRepo) MarkPosted(ctx context.Context, id uuid.UUID) (time.Time, error) {
+	var at time.Time
+	err := r.db.QueryRowContext(ctx,
+		`UPDATE ledger.transactions SET status = 'posted', posted_at = now()
+		 WHERE id = $1 AND status = 'pending' RETURNING posted_at`, id).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return at, errdefs.Internalf(nil, "transaction %s not pending when posting", id)
+	}
+	if err != nil {
+		return at, errdefs.Internalf(err, "mark posted")
+	}
+	return at, nil
+}
+
 // NextExpiredHold returns one internal pending transaction past its expiry and
 // locks it, skipping rows another worker holds. Rail-backed holds are resolved
 // by their rail, never by the clock. Tx-bound only: the caller voids the hold
@@ -160,8 +175,8 @@ func (r *TransactionRepo) ListByParent(ctx context.Context, parentID uuid.UUID) 
 func (r *TransactionRepo) Summary(ctx context.Context, id uuid.UUID) (domain.TransactionSummary, error) {
 	var s domain.TransactionSummary
 	err := r.db.QueryRowContext(ctx,
-		`SELECT total, captured, reversed FROM ledger.transaction_summaries WHERE id = $1`, id,
-	).Scan(&s.Total, &s.Captured, &s.Reversed)
+		`SELECT total, captured, reversed, settlement FROM ledger.transaction_summaries WHERE id = $1`, id,
+	).Scan(&s.Total, &s.Captured, &s.Reversed, &s.Settlement)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, domain.ErrTransactionNotFound(id)
 	}

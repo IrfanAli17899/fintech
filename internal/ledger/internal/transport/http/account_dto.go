@@ -24,6 +24,7 @@ type accountEntryResponse struct {
 	Amount        int64      `json:"amount"`
 	Direction     string     `json:"direction"`
 	CreatedAt     time.Time  `json:"created_at"`
+	PostedAt      *time.Time `json:"posted_at,omitempty"`
 	TransactionID uuid.UUID  `json:"transaction_id"`
 	Kind          string     `json:"kind"`
 	Status        string     `json:"status"`
@@ -122,7 +123,7 @@ func toHistoryResponse(h *application.History) *historyResponse {
 	out := make([]accountEntryResponse, len(h.Entries))
 	for i, e := range h.Entries {
 		out[i] = accountEntryResponse{
-			Seq: e.Seq, Amount: e.Amount, Direction: string(e.Direction), CreatedAt: e.CreatedAt,
+			Seq: e.Seq, Amount: e.Amount, Direction: string(e.Direction), CreatedAt: e.CreatedAt, PostedAt: e.PostedAt,
 			TransactionID: e.TransactionID, Kind: string(e.Kind), Status: string(e.Status),
 			Rail: e.Rail, ParentID: e.ParentID,
 		}

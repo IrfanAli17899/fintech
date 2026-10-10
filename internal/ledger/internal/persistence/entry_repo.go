@@ -91,7 +91,7 @@ func (r *EntryRepo) ListByTransaction(ctx context.Context, txID uuid.UUID) ([]do
 // transaction's header. beforeSeq == 0 means start from the newest.
 func (r *EntryRepo) ListByAccount(ctx context.Context, accountID uuid.UUID, beforeSeq int64, limit int) ([]domain.AccountEntry, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT e.seq, e.amount, e.direction, e.created_at,
+		SELECT e.seq, e.amount, e.direction, e.created_at, t.posted_at,
 		       t.id, t.kind, t.status, t.rail, t.parent_id
 		FROM ledger.entries e
 		JOIN ledger.transactions t ON t.id = e.transaction_id
@@ -106,7 +106,7 @@ func (r *EntryRepo) ListByAccount(ctx context.Context, accountID uuid.UUID, befo
 	out := make([]domain.AccountEntry, 0, limit)
 	for rows.Next() {
 		var a domain.AccountEntry
-		if err := rows.Scan(&a.Seq, &a.Amount, &a.Direction, &a.CreatedAt, &a.TransactionID, &a.Kind, &a.Status, &a.Rail, &a.ParentID); err != nil {
+		if err := rows.Scan(&a.Seq, &a.Amount, &a.Direction, &a.CreatedAt, &a.PostedAt, &a.TransactionID, &a.Kind, &a.Status, &a.Rail, &a.ParentID); err != nil {
 			return nil, errdefs.Internalf(err, "scan account entry")
 		}
 		out = append(out, a)

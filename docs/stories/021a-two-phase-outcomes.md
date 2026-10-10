@@ -57,6 +57,6 @@ finished by the next run.
 
 - refunds still settle by capturing the pending child, which marks the child
   voided and drops it from ChildAmountsByAccount, so a settled refund stops
-  counting toward the original's total. 21b settles refund children in place
-  (PostPending)
+  counting toward the original's total. Fixed in 21b (refund children post in
+  place)
 - reconciler and the stuck (attempt_count ≥ 10) report: 21c
