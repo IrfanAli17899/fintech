@@ -32,10 +32,8 @@ const (
 // ---- fixture ----
 
 type fixture struct {
-	ctx      context.Context
-	ledger   *application.LedgerService
-	accounts *application.AccountService
-	admin    *application.AdminService
+	ctx context.Context
+	svc *application.Service
 }
 
 func setup(t *testing.T) fixture {
@@ -81,10 +79,8 @@ func setupWith(t *testing.T, db *database.DB, reg ports.RailRegistry) fixture {
 	idem := persistence.NewIdempotencyRepo(db.DB)
 
 	return fixture{
-		ctx:      context.Background(),
-		ledger:   application.NewLedgerService(db, acc, txn, ent, bal, idem, reg),
-		accounts: application.NewAccountService(db, acc, bal, ent),
-		admin:    application.NewAdminService(db, bal),
+		ctx: context.Background(),
+		svc: application.NewService(db, acc, txn, ent, bal, idem, reg),
 	}
 }
 
@@ -102,7 +98,7 @@ func must(t *testing.T, err error) {
 
 func (f fixture) account(t *testing.T, typ domain.AccountType) uuid.UUID {
 	t.Helper()
-	acc, err := f.accounts.CreateAccount(f.ctx, domain.Account{
+	acc, err := f.svc.CreateAccount(f.ctx, domain.Account{
 		OwnerType: domain.OwnerCustomer, OwnerID: uuid.NewString(), Currency: "PKR", Type: typ,
 	})
 	must(t, err)
@@ -111,21 +107,21 @@ func (f fixture) account(t *testing.T, typ domain.AccountType) uuid.UUID {
 
 func (f fixture) balance(t *testing.T, id uuid.UUID) domain.Balance {
 	t.Helper()
-	b, err := f.accounts.GetAccountBalance(f.ctx, id)
+	b, err := f.svc.GetAccountBalance(f.ctx, id)
 	must(t, err)
 	return *b
 }
 
 func (f fixture) post(t *testing.T, tr domain.Transaction) *domain.Transaction {
 	t.Helper()
-	created, _, err := f.ledger.Post(f.ctx, tr)
+	created, _, err := f.svc.Post(f.ctx, tr)
 	must(t, err)
 	return created
 }
 
 func (f fixture) verifyClean(t *testing.T) {
 	t.Helper()
-	ms, err := f.admin.VerifyBalances(f.ctx)
+	ms, err := f.svc.VerifyBalances(f.ctx)
 	must(t, err)
 	if len(ms) != 0 {
 		t.Fatalf("balance cache drift: %+v", ms)
@@ -138,7 +134,7 @@ func (f fixture) applyAll(t *testing.T, at time.Time) application.OutcomeStats {
 	t.Helper()
 	var total application.OutcomeStats
 	for {
-		st, err := f.ledger.ApplyOutcomes(f.ctx, at, 100)
+		st, err := f.svc.ApplyOutcomes(f.ctx, at, 100)
 		must(t, err)
 		total.Claimed += st.Claimed
 		total.Settled += st.Settled
@@ -209,7 +205,7 @@ func TestPost_Success(t *testing.T) {
 	if len(got.Entries) != 2 {
 		t.Fatalf("entries = %d", len(got.Entries))
 	}
-	back, err := f.ledger.GetTransaction(f.ctx, got.ID)
+	back, err := f.svc.GetTransaction(f.ctx, got.ID)
 	must(t, err)
 	if len(back.Entries) != 2 {
 		t.Fatalf("GetTransaction entries = %d", len(back.Entries))
@@ -223,7 +219,7 @@ func TestPost_Success(t *testing.T) {
 func TestPost_UnknownAccount(t *testing.T) {
 	f := setup(t)
 	cash := f.account(t, domain.AccountAsset)
-	_, _, err := f.ledger.Post(f.ctx, transfer(cash, uuid.New(), 100, uuid.NewString()))
+	_, _, err := f.svc.Post(f.ctx, transfer(cash, uuid.New(), 100, uuid.NewString()))
 	if !errdefs.Is(err, domain.CodeAccountNotFound) {
 		t.Fatalf("want ACCOUNT_NOT_FOUND, got %v", err)
 	}
@@ -232,11 +228,11 @@ func TestPost_UnknownAccount(t *testing.T) {
 func TestPost_CurrencyMismatch(t *testing.T) {
 	f := setup(t)
 	pkr := f.account(t, domain.AccountAsset)
-	usd, err := f.accounts.CreateAccount(f.ctx, domain.Account{
+	usd, err := f.svc.CreateAccount(f.ctx, domain.Account{
 		OwnerType: domain.OwnerCustomer, OwnerID: uuid.NewString(), Currency: "USD", Type: domain.AccountLiability,
 	})
 	must(t, err)
-	_, _, err = f.ledger.Post(f.ctx, transfer(pkr, usd.ID, 100, uuid.NewString()))
+	_, _, err = f.svc.Post(f.ctx, transfer(pkr, usd.ID, 100, uuid.NewString()))
 	if !errdefs.Is(err, domain.CodeCurrencyMismatch) {
 		t.Fatalf("want CURRENCY_MISMATCH, got %v", err)
 	}
@@ -250,12 +246,12 @@ func TestPost_ReplayReturnsOriginal(t *testing.T) {
 	ali := f.account(t, domain.AccountLiability)
 	key := uuid.NewString()
 
-	first, replayed, err := f.ledger.Post(f.ctx, transfer(cash, ali, 100, key))
+	first, replayed, err := f.svc.Post(f.ctx, transfer(cash, ali, 100, key))
 	must(t, err)
 	if replayed {
 		t.Fatal("first post marked as replay")
 	}
-	second, replayed, err := f.ledger.Post(f.ctx, transfer(cash, ali, 100, key))
+	second, replayed, err := f.svc.Post(f.ctx, transfer(cash, ali, 100, key))
 	must(t, err)
 	if !replayed || second.ID != first.ID {
 		t.Fatalf("replay=%v id match=%v", replayed, second.ID == first.ID)
@@ -272,7 +268,7 @@ func TestPost_KeyReusedWithDifferentPayload(t *testing.T) {
 	key := uuid.NewString()
 
 	f.post(t, transfer(cash, ali, 100, key))
-	_, _, err := f.ledger.Post(f.ctx, transfer(cash, ali, 101, key))
+	_, _, err := f.svc.Post(f.ctx, transfer(cash, ali, 101, key))
 	if !errdefs.Is(err, domain.CodeIdempotencyKeyReused) {
 		t.Fatalf("want IDEMPOTENCY_KEY_REUSED, got %v", err)
 	}
@@ -293,7 +289,7 @@ func TestPost_ConcurrentSameKeyCreatesOne(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, _, err := f.ledger.Post(f.ctx, transfer(cash, ali, 100, key))
+			got, _, err := f.svc.Post(f.ctx, transfer(cash, ali, 100, key))
 			if err != nil {
 				t.Errorf("post: %v", err)
 				return
@@ -321,7 +317,7 @@ func TestPost_InsufficientFunds(t *testing.T) {
 	sara := f.account(t, domain.AccountLiability)
 
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
-	_, _, err := f.ledger.Post(f.ctx, transfer(ali, sara, 1001, uuid.NewString()))
+	_, _, err := f.svc.Post(f.ctx, transfer(ali, sara, 1001, uuid.NewString()))
 	if !errdefs.Is(err, domain.CodeInsufficientFunds) {
 		t.Fatalf("want INSUFFICIENT_FUNDS, got %v", err)
 	}
@@ -356,7 +352,7 @@ func TestPost_ConcurrentTransfersCannotOverdraw(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := f.ledger.Post(f.ctx, transfer(ali, sara, 100, uuid.NewString()))
+			_, _, err := f.svc.Post(f.ctx, transfer(ali, sara, 100, uuid.NewString()))
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -392,13 +388,13 @@ func TestPost_OppositeDirectionsDoNotDeadlock(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			if _, _, err := f.ledger.Post(f.ctx, transfer(a, b, 10, uuid.NewString())); err != nil {
+			if _, _, err := f.svc.Post(f.ctx, transfer(a, b, 10, uuid.NewString())); err != nil {
 				t.Errorf("a→b: %v", err)
 			}
 		}()
 		go func() {
 			defer wg.Done()
-			if _, _, err := f.ledger.Post(f.ctx, transfer(b, a, 10, uuid.NewString())); err != nil {
+			if _, _, err := f.svc.Post(f.ctx, transfer(b, a, 10, uuid.NewString())); err != nil {
 				t.Errorf("b→a: %v", err)
 			}
 		}()
@@ -428,7 +424,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		},
 	})
 
-	r1, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 50, IdempotencyKey: uuid.NewString()})
+	r1, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 50, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if r1.ParentID == nil || *r1.ParentID != pay.ID {
 		t.Fatal("reversal not linked to original")
@@ -437,10 +433,10 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		t.Fatalf("shop after partial = %d, want 67", b.Posted)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
-	orig, err := f.ledger.GetTransaction(f.ctx, pay.ID)
+	orig, err := f.svc.GetTransaction(f.ctx, pay.ID)
 	must(t, err)
 	if orig.Status != domain.TransactionStatusPosted {
 		t.Fatalf("original status = %s, want posted (reversal never mutates the original)", orig.Status)
@@ -452,7 +448,7 @@ func TestReverse_PartialThenRest(t *testing.T) {
 		t.Fatalf("shop should be back to 0, got %d", b.Posted)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
@@ -467,7 +463,7 @@ func TestReverse_ExceedsOriginal(t *testing.T) {
 	f.post(t, transfer(cash, ali, 100, uuid.NewString()))
 	pay := f.post(t, transfer(ali, sara, 100, uuid.NewString()))
 
-	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 101, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 101, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
@@ -490,7 +486,7 @@ func TestReverse_ConcurrentPartialsCannotExceed(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 70, IdempotencyKey: uuid.NewString()})
+			_, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: pay.ID, Amount: 70, IdempotencyKey: uuid.NewString()})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -559,7 +555,7 @@ func TestPost_HoldThenOverdrawRejected(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	f.post(t, hold(ali, sara, 500, uuid.NewString()))
 
-	_, _, err := f.ledger.Post(f.ctx, transfer(ali, sara, 600, uuid.NewString()))
+	_, _, err := f.svc.Post(f.ctx, transfer(ali, sara, 600, uuid.NewString()))
 	if !errdefs.Is(err, domain.CodeInsufficientFunds) {
 		t.Fatalf("want INSUFFICIENT_FUNDS, got %v", err)
 	}
@@ -585,7 +581,7 @@ func TestPost_ConcurrentHoldsCannotOverReserve(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := f.ledger.Post(f.ctx, hold(ali, sara, 100, uuid.NewString()))
+			_, _, err := f.svc.Post(f.ctx, hold(ali, sara, 100, uuid.NewString()))
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -625,7 +621,7 @@ func TestPost_ConcurrentCreditsToOneMerchant(t *testing.T) {
 		wg.Add(1)
 		go func(w uuid.UUID) {
 			defer wg.Done()
-			if _, _, err := f.ledger.Post(f.ctx, transfer(w, shop, 100, uuid.NewString())); err != nil {
+			if _, _, err := f.svc.Post(f.ctx, transfer(w, shop, 100, uuid.NewString())); err != nil {
 				t.Errorf("payment to shop: %v", err)
 			}
 		}(w)
@@ -648,7 +644,7 @@ func TestCapture_Full(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	cap, replayed, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	cap, replayed, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if replayed || cap.Status != domain.TransactionStatusPosted || cap.ParentID == nil || *cap.ParentID != h.ID {
 		t.Fatalf("capture: %+v", cap)
@@ -656,7 +652,7 @@ func TestCapture_Full(t *testing.T) {
 	if cap.Kind != h.Kind {
 		t.Fatalf("capture kind = %s, want %s", cap.Kind, h.Kind)
 	}
-	holdNow, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	holdNow, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if holdNow.Status != domain.TransactionStatusVoided {
 		t.Fatalf("hold status = %s, want voided", holdNow.Status)
@@ -680,7 +676,7 @@ func TestCapture_PartialKeepsRestReserved(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	cap, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	cap, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if cap.Total() != 300 {
 		t.Fatalf("capture total = %d, want 300", cap.Total())
@@ -694,7 +690,7 @@ func TestCapture_PartialKeepsRestReserved(t *testing.T) {
 		t.Fatalf("shop: %+v", s)
 	}
 
-	holdNow, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	holdNow, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if holdNow.Status != domain.TransactionStatusPending {
 		t.Fatalf("hold should stay pending after partial capture, got %s", holdNow.Status)
@@ -710,7 +706,7 @@ func TestCapture_ExceedsHold(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 501, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 501, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeCaptureExceedsHold) {
 		t.Fatalf("want CAPTURE_EXCEEDS_HOLD, got %v", err)
 	}
@@ -727,11 +723,11 @@ func TestCapture_NotPending(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	posted := f.post(t, transfer(ali, shop, 100, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("capture posted: want TRANSACTION_NOT_PENDING, got %v", err)
 	}
-	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Void(f.ctx, application.VoidCommand{HoldID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("void posted: want TRANSACTION_NOT_PENDING, got %v", err)
 	}
@@ -745,7 +741,7 @@ func TestVoid_ReleasesHold(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	v, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	v, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if v.ID != h.ID || v.Status != domain.TransactionStatusVoided {
 		t.Fatalf("void: %+v", v)
@@ -757,7 +753,7 @@ func TestVoid_ReleasesHold(t *testing.T) {
 	if s := f.balance(t, shop); s.Posted != 0 || s.PendingIn != 0 {
 		t.Fatalf("shop after void: %+v", s)
 	}
-	_, _, err = f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("want TRANSACTION_NOT_PENDING, got %v", err)
 	}
@@ -773,9 +769,9 @@ func TestCapture_ReplayReturnsCapture(t *testing.T) {
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 	key := uuid.NewString()
 
-	first, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
+	first, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
 	must(t, err)
-	second, replayed, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
+	second, replayed, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: key})
 	must(t, err)
 	if !replayed || second.ID != first.ID {
 		t.Fatalf("replay=%v same=%v", replayed, second.ID == first.ID)
@@ -802,7 +798,7 @@ func TestCapture_ConcurrentCapturesOnlyOneWins(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+			_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -833,12 +829,12 @@ func TestCapture_TwiceThenExhausted(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	_, _, err = f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
-	holdNow, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	holdNow, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if holdNow.Status != domain.TransactionStatusVoided {
 		t.Fatalf("fully captured hold should be voided, got %s", holdNow.Status)
@@ -850,7 +846,7 @@ func TestCapture_TwiceThenExhausted(t *testing.T) {
 	if s := f.balance(t, shop); s.Posted != 500 || s.PendingIn != 0 {
 		t.Fatalf("shop: %+v", s)
 	}
-	_, _, err = f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 1, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeTransactionNotPending) {
 		t.Fatalf("want TRANSACTION_NOT_PENDING, got %v", err)
 	}
@@ -865,9 +861,9 @@ func TestVoid_AfterPartialReleasesRest(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
 
-	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	a := f.balance(t, ali)
@@ -890,12 +886,12 @@ func TestExpireHolds_VoidsPastDue(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, holdExpiring(ali, shop, 500, time.Now().Add(-time.Minute)))
 
-	n, err := f.ledger.ExpireHolds(f.ctx, time.Now(), 100)
+	n, err := f.svc.ExpireHolds(f.ctx, time.Now(), 100)
 	must(t, err)
 	if n < 1 {
 		t.Fatalf("expired %d, want at least 1", n)
 	}
-	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if got.Status != domain.TransactionStatusVoided {
 		t.Fatalf("status = %s, want voided", got.Status)
@@ -914,9 +910,9 @@ func TestExpireHolds_LeavesFutureAlone(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, holdExpiring(ali, shop, 500, time.Now().Add(time.Hour)))
 
-	_, err := f.ledger.ExpireHolds(f.ctx, time.Now(), 100)
+	_, err := f.svc.ExpireHolds(f.ctx, time.Now(), 100)
 	must(t, err)
-	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if got.Status != domain.TransactionStatusPending {
 		t.Fatalf("future hold touched: %s", got.Status)
@@ -930,10 +926,10 @@ func TestExpireHolds_PartiallyCapturedReleasesRest(t *testing.T) {
 	shop := f.account(t, domain.AccountLiability)
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	h := f.post(t, holdExpiring(ali, shop, 500, time.Now().Add(-time.Minute)))
-	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
-	_, err = f.ledger.ExpireHolds(f.ctx, time.Now(), 100)
+	_, err = f.svc.ExpireHolds(f.ctx, time.Now(), 100)
 	must(t, err)
 	a := f.balance(t, ali)
 	if a.Posted != 700 || a.PendingOut != 0 || a.Available != 700 {
@@ -961,7 +957,7 @@ func TestExpireHolds_ConcurrentWorkersVoidEachOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				n, err := f.ledger.ExpireHolds(f.ctx, time.Now(), 5)
+				n, err := f.svc.ExpireHolds(f.ctx, time.Now(), 5)
 				if err != nil {
 					t.Errorf("expire: %v", err)
 					return
@@ -976,7 +972,7 @@ func TestExpireHolds_ConcurrentWorkersVoidEachOnce(t *testing.T) {
 	wg.Wait()
 
 	for _, id := range ids {
-		got, err := f.ledger.GetTransaction(f.ctx, id)
+		got, err := f.svc.GetTransaction(f.ctx, id)
 		must(t, err)
 		if got.Status != domain.TransactionStatusVoided {
 			t.Fatalf("hold %s not voided", id)
@@ -989,9 +985,9 @@ func TestExpireHolds_LeavesRailBackedAlone(t *testing.T) {
 	f := setup(t)
 	h := cardHold(t, f)
 
-	_, err := f.ledger.ExpireHolds(f.ctx, h.ExpiresAt.Add(time.Minute), 1000)
+	_, err := f.svc.ExpireHolds(f.ctx, h.ExpiresAt.Add(time.Minute), 1000)
 	must(t, err)
-	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if got.Status != domain.TransactionStatusPending {
 		t.Fatalf("rail-backed hold expired by the clock: %s", got.Status)
@@ -1007,7 +1003,7 @@ func TestPost_UnknownRail(t *testing.T) {
 
 	x := transfer(cash, ali, 100, uuid.NewString())
 	x.Rail = "carrier-pigeon"
-	_, _, err := f.ledger.Post(f.ctx, x)
+	_, _, err := f.svc.Post(f.ctx, x)
 	if !errdefs.Is(err, domain.CodeUnknownRail) {
 		t.Fatalf("want UNKNOWN_RAIL, got %v", err)
 	}
@@ -1062,7 +1058,7 @@ func TestPost_RailFailureRejects(t *testing.T) {
 
 	x := transfer(cash, ali, 100, uuid.NewString())
 	x.Rail = "fake"
-	_, _, err := f.ledger.Post(f.ctx, x)
+	_, _, err := f.svc.Post(f.ctx, x)
 	if !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("want RAIL_FAILED, got %v", err)
 	}
@@ -1079,7 +1075,7 @@ func TestPost_RejectedPostNeverReachesRail(t *testing.T) {
 
 	x := transfer(ali, shop, 100, uuid.NewString())
 	x.Rail = "fake"
-	_, _, err := f.ledger.Post(f.ctx, x)
+	_, _, err := f.svc.Post(f.ctx, x)
 	if !errdefs.Is(err, domain.CodeInsufficientFunds) {
 		t.Fatalf("want INSUFFICIENT_FUNDS before the rail is asked, got %v", err)
 	}
@@ -1099,7 +1095,7 @@ func TestReverse_IrreversibleRailRejected(t *testing.T) {
 	x.Kind, x.Rail = kindTopup, "fake"
 	posted := f.post(t, x)
 
-	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1120,7 +1116,7 @@ func TestReverse_RailRefusalLeavesReservationForReconciler(t *testing.T) {
 	x.Kind, x.Rail = kindTopup, "fake"
 	posted := f.post(t, x)
 
-	refund, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	refund, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("want RAIL_FAILED, got %v", err)
 	}
@@ -1153,7 +1149,7 @@ func TestPost_RaastIsImmediateAndFinal(t *testing.T) {
 		t.Fatalf("ali: %+v", b)
 	}
 
-	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: got.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: got.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1161,18 +1157,18 @@ func TestPost_RaastIsImmediateAndFinal(t *testing.T) {
 
 func TestPost_RTPRailRejectsWrongCurrency(t *testing.T) {
 	f := setup(t)
-	usdCash, err := f.accounts.CreateAccount(f.ctx, domain.Account{
+	usdCash, err := f.svc.CreateAccount(f.ctx, domain.Account{
 		OwnerType: domain.OwnerSystem, OwnerID: uuid.NewString(), Currency: "USD", Type: domain.AccountAsset,
 	})
 	must(t, err)
-	usdAli, err := f.accounts.CreateAccount(f.ctx, domain.Account{
+	usdAli, err := f.svc.CreateAccount(f.ctx, domain.Account{
 		OwnerType: domain.OwnerCustomer, OwnerID: uuid.NewString(), Currency: "USD", Type: domain.AccountLiability,
 	})
 	must(t, err)
 
 	x := transfer(usdCash.ID, usdAli.ID, 100, uuid.NewString())
 	x.Kind, x.Rail = kindTopup, "raast"
-	_, _, err = f.ledger.Post(f.ctx, x)
+	_, _, err = f.svc.Post(f.ctx, x)
 	if !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("want RAIL_FAILED, got %v", err)
 	}
@@ -1194,12 +1190,12 @@ func TestVoidAndCapture_RailManagedHold(t *testing.T) {
 	h := cardHold(t, f)
 
 	// capture is the rail's job
-	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailManagedHold) {
 		t.Fatalf("capture: want RAIL_MANAGED_HOLD, got %v", err)
 	}
 	// void goes through the rail's cancel: the hold comes back still pending
-	v, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	v, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if v.Status != domain.TransactionStatusPending {
 		t.Fatalf("void must not resolve a rail hold directly: %s", v.Status)
@@ -1215,7 +1211,7 @@ func TestOutcomes_CardTopupSettles(t *testing.T) {
 	ali := h.Entries[1].AccountID
 
 	f.applyAll(t, time.Now())
-	if got, _ := f.ledger.GetTransaction(f.ctx, h.ID); got.Status != domain.TransactionStatusPending {
+	if got, _ := f.svc.GetTransaction(f.ctx, h.ID); got.Status != domain.TransactionStatusPending {
 		t.Fatalf("settled early: %s", got.Status)
 	}
 
@@ -1223,7 +1219,7 @@ func TestOutcomes_CardTopupSettles(t *testing.T) {
 	if st.Diverged != 0 {
 		t.Fatalf("divergence: %+v", st)
 	}
-	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if got.Status != domain.TransactionStatusVoided {
 		t.Fatalf("hold after settle = %s", got.Status)
@@ -1247,7 +1243,7 @@ func TestOutcomes_SwiftBounceVoidsWithReason(t *testing.T) {
 	if st.Bounced < 1 || st.Diverged != 0 {
 		t.Fatalf("%+v", st)
 	}
-	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if got.Status != domain.TransactionStatusVoided || got.StatusReason == nil || !strings.HasPrefix(*got.StatusReason, "bounced:") {
 		t.Fatalf("%+v", got)
@@ -1270,12 +1266,12 @@ func TestOutcomes_SettledSwiftIsFinal(t *testing.T) {
 	if b := f.balance(t, ali); b.Posted != 1000 {
 		t.Fatalf("ali: %+v", b)
 	}
-	kids, err := f.ledger.Children(f.ctx, h.ID)
+	kids, err := f.svc.Children(f.ctx, h.ID)
 	must(t, err)
 	if len(kids) != 1 {
 		t.Fatalf("children = %d", len(kids))
 	}
-	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: kids[0].ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: kids[0].ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailNotReversible) {
 		t.Fatalf("want RAIL_NOT_REVERSIBLE, got %v", err)
 	}
@@ -1287,14 +1283,14 @@ func TestOutcomes_VoidOnCardHoldGoesThroughCancel(t *testing.T) {
 	h := cardHold(t, f)
 	ali := h.Entries[1].AccountID
 
-	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	st := f.applyAll(t, time.Now())
 	if st.Cancelled != 1 || st.Diverged != 0 {
 		t.Fatalf("%+v", st)
 	}
-	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if got.Status != domain.TransactionStatusVoided || got.StatusReason == nil || *got.StatusReason != "cancelled at rail" {
 		t.Fatalf("%+v", got)
@@ -1319,7 +1315,7 @@ func TestOutcomes_SwiftHoldCannotBeCancelled(t *testing.T) {
 	x.Kind, x.Rail = kindTopup, "swift"
 	h := f.post(t, x)
 
-	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailCannotCancel) {
 		t.Fatalf("want RAIL_CANNOT_CANCEL, got %v", err)
 	}
@@ -1331,13 +1327,13 @@ func TestOutcomes_CardRefundsArePendingThenSettle(t *testing.T) {
 	h := cardHold(t, f)
 	ali := h.Entries[1].AccountID
 	f.applyAll(t, time.Now().Add(72*time.Hour))
-	kids, err := f.ledger.Children(f.ctx, h.ID)
+	kids, err := f.svc.Children(f.ctx, h.ID)
 	must(t, err)
 	settled := kids[0]
 
-	r1, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 3000, IdempotencyKey: uuid.NewString()})
+	r1, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 3000, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	r2, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1000, IdempotencyKey: uuid.NewString()})
+	r2, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1000, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if r1.Status != domain.TransactionStatusPending || r2.Status != domain.TransactionStatusPending {
 		t.Fatalf("rail refunds must be pending: %s %s", r1.Status, r2.Status)
@@ -1349,7 +1345,7 @@ func TestOutcomes_CardRefundsArePendingThenSettle(t *testing.T) {
 		t.Fatalf("ali while refunds pending: %+v", b)
 	}
 	// pending refunds already count: a third that would exceed is rejected
-	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1500, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1500, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("want REVERSAL_EXCEEDS_ORIGINAL, got %v", err)
 	}
@@ -1406,7 +1402,7 @@ func TestOutcomes_TwoWorkersApplyEachOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				st, err := f.ledger.ApplyOutcomes(f.ctx, later, 5)
+				st, err := f.svc.ApplyOutcomes(f.ctx, later, 5)
 				if err != nil {
 					t.Errorf("apply: %v", err)
 					return
@@ -1423,7 +1419,7 @@ func TestOutcomes_TwoWorkersApplyEachOnce(t *testing.T) {
 		t.Fatalf("divergence under two workers: %d", diverged.Load())
 	}
 	for _, id := range ids {
-		got, err := f.ledger.GetTransaction(f.ctx, id)
+		got, err := f.svc.GetTransaction(f.ctx, id)
 		must(t, err)
 		if got.Status != domain.TransactionStatusVoided {
 			t.Fatalf("hold %s not settled", id)
@@ -1443,7 +1439,7 @@ func TestOutcomes_SwiftVoidRefusalDoesNotSpendKey(t *testing.T) {
 	cmd := application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()}
 	for i := 0; i < 2; i++ {
 		// a spent key would replay the hold with no error on the second call
-		if _, _, err := f.ledger.Void(f.ctx, cmd); !errdefs.Is(err, domain.CodeRailCannotCancel) {
+		if _, _, err := f.svc.Void(f.ctx, cmd); !errdefs.Is(err, domain.CodeRailCannotCancel) {
 			t.Fatalf("call %d: want RAIL_CANNOT_CANCEL, got %v", i+1, err)
 		}
 	}
@@ -1457,7 +1453,7 @@ func TestOutcomes_CancelLosingToSettlementIsAConflict(t *testing.T) {
 	rail, _ := rails.New(connectTestDB(t)).Get("card")
 	must(t, rail.Settle(f.ctx, h.RailRef))
 
-	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeHoldAlreadySettling) {
 		t.Fatalf("want HOLD_ALREADY_SETTLING, got %v", err)
 	}
@@ -1486,10 +1482,10 @@ func TestVoid_ReplayAfterRailTimeoutAsksAgain(t *testing.T) {
 	h := f.post(t, x)
 
 	cmd := application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()}
-	if _, _, err := f.ledger.Void(f.ctx, cmd); !errdefs.Is(err, domain.CodeRailFailed) {
+	if _, _, err := f.svc.Void(f.ctx, cmd); !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("first call: want RAIL_FAILED, got %v", err)
 	}
-	got, replayed, err := f.ledger.Void(f.ctx, cmd)
+	got, replayed, err := f.svc.Void(f.ctx, cmd)
 	must(t, err)
 	if !replayed || got.Status != domain.TransactionStatusPending || calls.cancel != 2 {
 		t.Fatalf("retry must reach the rail again: replayed=%v status=%s cancel calls=%d", replayed, got.Status, calls.cancel)
@@ -1512,10 +1508,10 @@ func TestReverse_ReplayAfterRailTimeoutAsksAgain(t *testing.T) {
 	posted := f.post(t, x)
 
 	cmd := application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()}
-	if _, _, err := f.ledger.Reverse(f.ctx, cmd); !errdefs.Is(err, domain.CodeRailFailed) {
+	if _, _, err := f.svc.Reverse(f.ctx, cmd); !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("first call: want RAIL_FAILED, got %v", err)
 	}
-	got, replayed, err := f.ledger.Reverse(f.ctx, cmd)
+	got, replayed, err := f.svc.Reverse(f.ctx, cmd)
 	must(t, err)
 	if !replayed || got.Status != domain.TransactionStatusPending || calls.reverse != 2 {
 		t.Fatalf("retry must reach the rail again: replayed=%v status=%s reverse calls=%d", replayed, got.Status, calls.reverse)
@@ -1534,7 +1530,7 @@ func settledCardPayment(t *testing.T, f fixture) (*domain.Transaction, uuid.UUID
 	t.Helper()
 	h := cardHold(t, f)
 	f.applyAll(t, time.Now().Add(72*time.Hour))
-	kids, err := f.ledger.Children(f.ctx, h.ID)
+	kids, err := f.svc.Children(f.ctx, h.ID)
 	must(t, err)
 	if len(kids) != 1 {
 		t.Fatalf("children = %d", len(kids))
@@ -1547,18 +1543,18 @@ func TestRefund_SettlesInPlace(t *testing.T) {
 	f.drain(t)
 	settled, _ := settledCardPayment(t, f)
 
-	r, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 2000, IdempotencyKey: uuid.NewString()})
+	r, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 2000, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if st := f.applyAll(t, time.Now()); st.Refunded != 1 || st.Diverged != 0 {
 		t.Fatalf("%+v", st)
 	}
 
-	got, err := f.ledger.GetTransaction(f.ctx, r.ID)
+	got, err := f.svc.GetTransaction(f.ctx, r.ID)
 	must(t, err)
 	if got.Status != domain.TransactionStatusPosted || got.PostedAt == nil {
 		t.Fatalf("refund child must post in place: %+v", got)
 	}
-	if kids, _ := f.ledger.Children(f.ctx, r.ID); len(kids) != 0 {
+	if kids, _ := f.svc.Children(f.ctx, r.ID); len(kids) != 0 {
 		t.Fatalf("refund child must have no children, has %d", len(kids))
 	}
 	f.verifyClean(t)
@@ -1569,7 +1565,7 @@ func TestRefund_SettledRefundsKeepCounting(t *testing.T) {
 	f.drain(t)
 	settled, ali := settledCardPayment(t, f)
 
-	_, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 4000, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 4000, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	f.applyAll(t, time.Now())
 
@@ -1577,11 +1573,11 @@ func TestRefund_SettledRefundsKeepCounting(t *testing.T) {
 	cash := f.account(t, domain.AccountAsset)
 	f.post(t, transfer(cash, ali, 10000, uuid.NewString()))
 
-	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1001, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1001, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeReversalExceedsOriginal) {
 		t.Fatalf("5000 settled, 4000 refunded: 1001 more must be rejected, got %v", err)
 	}
-	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err) // the remaining 1000 is still refundable
 	f.verifyClean(t)
 }
@@ -1591,9 +1587,9 @@ func TestVoid_PendingRefundChildCannotBeCancelled(t *testing.T) {
 	f.drain(t)
 	settled, _ := settledCardPayment(t, f)
 
-	r, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 500, IdempotencyKey: uuid.NewString()})
+	r, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 500, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: r.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Void(f.ctx, application.VoidCommand{HoldID: r.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailCannotCancel) {
 		t.Fatalf("want RAIL_CANNOT_CANCEL, got %v", err)
 	}
@@ -1609,7 +1605,7 @@ func TestSummary_SettlementLabels(t *testing.T) {
 
 	label := func(id uuid.UUID) string {
 		t.Helper()
-		got, err := f.ledger.GetTransaction(f.ctx, id)
+		got, err := f.svc.GetTransaction(f.ctx, id)
 		must(t, err)
 		return got.Summary.Settlement
 	}
@@ -1621,16 +1617,16 @@ func TestSummary_SettlementLabels(t *testing.T) {
 	}
 
 	partial := f.post(t, hold(ali, shop, 500, uuid.NewString()))
-	_, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: partial.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: partial.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: partial.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Void(f.ctx, application.VoidCommand{HoldID: partial.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if l := label(partial.ID); l != "partially_settled" {
 		t.Fatalf("partly captured then voided: %s", l)
 	}
 
 	cancelled := f.post(t, hold(ali, shop, 200, uuid.NewString()))
-	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: cancelled.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Void(f.ctx, application.VoidCommand{HoldID: cancelled.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 	if l := label(cancelled.ID); l != "voided" {
 		t.Fatalf("voided with no captures: %s", l)
@@ -1649,7 +1645,7 @@ func TestHistory_CarriesPostedAt(t *testing.T) {
 	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
 	f.post(t, hold(ali, shop, 300, uuid.NewString()))
 
-	h, err := f.accounts.History(f.ctx, ali, 0, 10)
+	h, err := f.svc.History(f.ctx, ali, 0, 10)
 	must(t, err)
 	if len(h.Entries) != 2 {
 		t.Fatalf("entries = %d", len(h.Entries))
@@ -1666,7 +1662,7 @@ func TestHistory_CarriesPostedAt(t *testing.T) {
 // returns the findings that touch ref or id.
 func (f fixture) reconcileLater(t *testing.T, ref string, id uuid.UUID) []domain.Finding {
 	t.Helper()
-	rep, err := f.ledger.Reconcile(f.ctx, time.Now().Add(time.Hour))
+	rep, err := f.svc.Reconcile(f.ctx, time.Now().Add(time.Hour))
 	must(t, err)
 	var out []domain.Finding
 	for _, x := range rep.Findings {
@@ -1695,7 +1691,7 @@ func TestReconcile_OrphanAttempt(t *testing.T) {
 	res, err := rail.Initiate(f.ctx, ports.RailInitiateRequest{TransactionID: uuid.New(), Amount: 700, Currency: "PKR", Kind: "topup"})
 	must(t, err)
 
-	rep, err := f.ledger.Reconcile(f.ctx, time.Now())
+	rep, err := f.svc.Reconcile(f.ctx, time.Now())
 	must(t, err)
 	for _, x := range rep.Findings {
 		if x.Ref == res.Ref {
@@ -1711,7 +1707,7 @@ func TestReconcile_VoidedButLive(t *testing.T) {
 	f := setup(t)
 	h := cardHold(t, f)
 	// what an HTTP void did before the rail guards: the ledger lets go, the rail does not
-	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString(), System: true})
+	_, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString(), System: true})
 	must(t, err)
 
 	if fs := f.reconcileLater(t, h.RailRef, h.ID); !hasFinding(fs, domain.FindingDivergence, domain.ReasonVoidedButLive) {
@@ -1724,7 +1720,7 @@ func TestReconcile_SettledNotCredited(t *testing.T) {
 	h := cardHold(t, f)
 	rail, _ := rails.New(connectTestDB(t)).Get("card")
 	must(t, rail.Settle(f.ctx, h.RailRef))
-	_, _, err := f.ledger.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString(), System: true})
+	_, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString(), System: true})
 	must(t, err)
 
 	fs := f.reconcileLater(t, h.RailRef, h.ID)
@@ -1739,7 +1735,7 @@ func TestReconcile_UnappliedOnlyPastGrace(t *testing.T) {
 	rail, _ := rails.New(connectTestDB(t)).Get("card")
 	must(t, rail.Settle(f.ctx, h.RailRef)) // decided, worker not yet run
 
-	rep, err := f.ledger.Reconcile(f.ctx, time.Now())
+	rep, err := f.svc.Reconcile(f.ctx, time.Now())
 	must(t, err)
 	for _, x := range rep.Findings {
 		if x.Ref == h.RailRef {
@@ -1780,7 +1776,7 @@ func TestReconcile_RefundNeverSent(t *testing.T) {
 	x.Kind, x.Rail = kindTopup, "fake"
 	posted := f.post(t, x)
 
-	child, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
+	child, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID, IdempotencyKey: uuid.NewString()})
 	if !errdefs.Is(err, domain.CodeRailFailed) {
 		t.Fatalf("want RAIL_FAILED, got %v", err)
 	}
@@ -1794,11 +1790,11 @@ func TestReconcile_HealthyFlowsReportNothing(t *testing.T) {
 	f.drain(t)
 
 	settled, _ := settledCardPayment(t, f)
-	refund, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1500, IdempotencyKey: uuid.NewString()})
+	refund, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: settled.ID, Amount: 1500, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	cancelled := cardHold(t, f)
-	_, _, err = f.ledger.Void(f.ctx, application.VoidCommand{HoldID: cancelled.ID, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Void(f.ctx, application.VoidCommand{HoldID: cancelled.ID, IdempotencyKey: uuid.NewString()})
 	must(t, err)
 
 	cash := f.account(t, domain.AccountAsset)
@@ -1837,7 +1833,7 @@ func TestPost_KindIsProductOwned(t *testing.T) {
 
 	x = transfer(cash, ali, 100, uuid.NewString())
 	x.Kind = ""
-	if _, _, err := f.ledger.Post(f.ctx, x); !errdefs.Is(err, domain.CodeInvalidTransactionKind) {
+	if _, _, err := f.svc.Post(f.ctx, x); !errdefs.Is(err, domain.CodeInvalidTransactionKind) {
 		t.Fatalf("want INVALID_TRANSACTION_KIND, got %v", err)
 	}
 }
@@ -1850,7 +1846,7 @@ func TestReverse_ChildCarriesCallerKindAndRelation(t *testing.T) {
 	f.post(t, transfer(cash, ali, 100, uuid.NewString()))
 	pay := f.post(t, transfer(ali, sara, 100, uuid.NewString()))
 
-	rev, _, err := f.ledger.Reverse(f.ctx, application.ReverseCommand{
+	rev, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{
 		Kind: "pharmacy_return", OriginalID: pay.ID, IdempotencyKey: uuid.NewString(),
 	})
 	must(t, err)
@@ -1873,17 +1869,17 @@ func TestSummary_TracksCapturesAndReversals(t *testing.T) {
 		t.Fatalf("fresh summary: %+v", h.Summary)
 	}
 
-	cap, _, err := f.ledger.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	cap, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	got, err := f.ledger.GetTransaction(f.ctx, h.ID)
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
 	must(t, err)
 	if got.Summary.Captured != 300 || got.Summary.Remaining != 200 {
 		t.Fatalf("after capture: %+v", got.Summary)
 	}
 
-	_, _, err = f.ledger.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: cap.ID, Amount: 100, IdempotencyKey: uuid.NewString()})
+	_, _, err = f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: cap.ID, Amount: 100, IdempotencyKey: uuid.NewString()})
 	must(t, err)
-	capNow, err := f.ledger.GetTransaction(f.ctx, cap.ID)
+	capNow, err := f.svc.GetTransaction(f.ctx, cap.ID)
 	must(t, err)
 	if capNow.Summary.Total != 300 || capNow.Summary.Reversed != 100 || capNow.Summary.Remaining != 200 {
 		t.Fatalf("capture after partial refund: %+v", capNow.Summary)
@@ -1902,7 +1898,7 @@ func TestHistory_PagesNewestFirst(t *testing.T) {
 	var before int64
 	pages := 0
 	for {
-		h, err := f.accounts.History(f.ctx, ali, before, 3)
+		h, err := f.svc.History(f.ctx, ali, before, 3)
 		must(t, err)
 		pages++
 		for _, e := range h.Entries {
@@ -1922,7 +1918,7 @@ func TestHistory_PagesNewestFirst(t *testing.T) {
 			t.Fatalf("not strictly descending at %d: %v", i, seen)
 		}
 	}
-	h, err := f.accounts.History(f.ctx, ali, 0, 1)
+	h, err := f.svc.History(f.ctx, ali, 0, 1)
 	must(t, err)
 	if h.Entries[0].Amount != 106 || h.Entries[0].Direction != domain.EntryDirectionCredit {
 		t.Fatalf("newest entry: %+v", h.Entries[0])
@@ -1931,7 +1927,7 @@ func TestHistory_PagesNewestFirst(t *testing.T) {
 
 func TestHistory_UnknownAccount(t *testing.T) {
 	f := setup(t)
-	_, err := f.accounts.History(f.ctx, uuid.New(), 0, 10)
+	_, err := f.svc.History(f.ctx, uuid.New(), 0, 10)
 	if !errdefs.Is(err, domain.CodeAccountNotFound) {
 		t.Fatalf("want ACCOUNT_NOT_FOUND, got %v", err)
 	}

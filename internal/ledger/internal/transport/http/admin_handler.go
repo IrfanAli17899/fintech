@@ -9,12 +9,11 @@ import (
 )
 
 type AdminHandler struct {
-	adminSvc  *application.AdminService
-	ledgerSvc *application.LedgerService
+	svc *application.Service
 }
 
-func NewAdminHandler(adminSvc *application.AdminService, ledgerSvc *application.LedgerService) *AdminHandler {
-	return &AdminHandler{adminSvc: adminSvc, ledgerSvc: ledgerSvc}
+func NewAdminHandler(svc *application.Service) *AdminHandler {
+	return &AdminHandler{svc: svc}
 }
 
 func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -24,16 +23,16 @@ func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *AdminHandler) Reconcile(w http.ResponseWriter, r *http.Request) {
-	rep, err := h.ledgerSvc.Reconcile(r.Context(), time.Now())
+	rep, err := h.svc.Reconcile(r.Context(), time.Now())
 	httpx.OK(w, toReconciliationResponse(rep), err)
 }
 
 func (h *AdminHandler) RebuildBalances(w http.ResponseWriter, r *http.Request) {
-	err := h.adminSvc.RebuildBalances(r.Context())
+	err := h.svc.RebuildBalances(r.Context())
 	httpx.NoContent(w, err)
 }
 
 func (h *AdminHandler) VerifyBalances(w http.ResponseWriter, r *http.Request) {
-	ms, err := h.adminSvc.VerifyBalances(r.Context())
+	ms, err := h.svc.VerifyBalances(r.Context())
 	httpx.OK(w, toVerifyBalancesResponse(ms), err)
 }

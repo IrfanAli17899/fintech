@@ -15,7 +15,7 @@ import (
 
 type Module struct {
 	db       *database.DB
-	accounts *application.AccountService
+	svc      *application.Service
 	jobs     []*scheduler.Loop
 	handlers []interface{ RegisterRoutes(*http.ServeMux) }
 }
@@ -27,22 +27,20 @@ func New(db *database.DB, rails ports.RailRegistry) *Module {
 	balanceRepo := persistence.NewBalanceRepo(db)
 	idemRepo := persistence.NewIdempotencyRepo(db)
 
-	accSvc := application.NewAccountService(db, accRepo, balanceRepo, entryRepo)
-	ledgerSvc := application.NewLedgerService(db, accRepo, txnRepo, entryRepo, balanceRepo, idemRepo, rails)
-	adminSvc := application.NewAdminService(db, balanceRepo)
+	svc := application.NewService(db, accRepo, txnRepo, entryRepo, balanceRepo, idemRepo, rails)
 
 	return &Module{
-		db:       db,
-		accounts: accSvc,
+		db:  db,
+		svc: svc,
 		jobs: []*scheduler.Loop{
-			scheduler.New("expire-holds", time.Minute, ledgerSvc.ExpirerJob(500)),
-			scheduler.New("outcomes", time.Minute, ledgerSvc.OutcomesJob(20)),
-			scheduler.New("reconcile", 15*time.Minute, ledgerSvc.ReconcileJob(50)),
+			scheduler.New("expire-holds", time.Minute, svc.ExpirerJob(500)),
+			scheduler.New("outcomes", time.Minute, svc.OutcomesJob(20)),
+			scheduler.New("reconcile", 15*time.Minute, svc.ReconcileJob(50)),
 		},
 		handlers: []interface{ RegisterRoutes(*http.ServeMux) }{
-			transporthttp.NewAccountHandler(accSvc),
-			transporthttp.NewTransactionHandler(ledgerSvc),
-			transporthttp.NewAdminHandler(adminSvc, ledgerSvc),
+			transporthttp.NewAccountHandler(svc),
+			transporthttp.NewTransactionHandler(svc),
+			transporthttp.NewAdminHandler(svc),
 		},
 	}
 }
@@ -54,7 +52,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (m *Module) Seed(ctx context.Context) error {
-	return m.accounts.SeedSystem(ctx)
+	return m.svc.SeedSystem(ctx)
 }
 
 func (m *Module) Start(ctx context.Context) {

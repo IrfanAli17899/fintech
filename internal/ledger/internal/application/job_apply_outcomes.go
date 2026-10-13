@@ -38,7 +38,7 @@ func (s OutcomeStats) Applied() int {
 // and acks it. A crash between phases is finished by the next run. The lease
 // covers the whole batch, so no other worker can claim a row while this run
 // may still reach it.
-func (s *LedgerService) ApplyOutcomes(ctx context.Context, now time.Time, batchSize int) (OutcomeStats, error) {
+func (s *Service) ApplyOutcomes(ctx context.Context, now time.Time, batchSize int) (OutcomeStats, error) {
 	lease := time.Duration(batchSize)*railCallBudget + leaseSlack
 	due, err := s.rails.ClaimDue(ctx, now, lease, batchSize)
 	st := OutcomeStats{Claimed: len(due)}
@@ -79,7 +79,7 @@ func (s *LedgerService) ApplyOutcomes(ctx context.Context, now time.Time, batchS
 
 // askRail is phase one: only settle outcomes arrive undecided; cancels and
 // refunds are decided synchronously by the call that creates them.
-func (s *LedgerService) askRail(ctx context.Context, o ports.Outcome) (ports.Decision, string, error) {
+func (s *Service) askRail(ctx context.Context, o ports.Outcome) (ports.Decision, string, error) {
 	if o.Kind != ports.OutcomeSettle {
 		return "", "", fmt.Errorf("undecided %s outcome; only settle outcomes are decided by the worker", o.Kind)
 	}
@@ -102,7 +102,7 @@ func (s *LedgerService) askRail(ctx context.Context, o ports.Outcome) (ports.Dec
 }
 
 // applyOutcome is phase two: make the ledger agree with the rail's decision.
-func (s *LedgerService) applyOutcome(ctx context.Context, o ports.Outcome, st *OutcomeStats) error {
+func (s *Service) applyOutcome(ctx context.Context, o ports.Outcome, st *OutcomeStats) error {
 	var err error
 	switch {
 	case o.Kind == ports.OutcomeSettle && o.Decision == ports.DecisionSettled:
@@ -162,12 +162,8 @@ func (s *LedgerService) applyOutcome(ctx context.Context, o ports.Outcome, st *O
 	}
 }
 
-func (s *LedgerService) systemVoid(ctx context.Context, id uuid.UUID, key, reason string) (*domain.Transaction, bool, error) {
-	return s.Void(ctx, VoidCommand{HoldID: id, IdempotencyKey: key, Reason: reason, System: true})
-}
-
 // OutcomesJob drains due outcomes in leased batches; wrap it in a scheduler.Loop.
-func (s *LedgerService) OutcomesJob(batchSize int) func(context.Context) {
+func (s *Service) OutcomesJob(batchSize int) func(context.Context) {
 	return func(ctx context.Context) {
 		for {
 			st, err := s.ApplyOutcomes(ctx, time.Now(), batchSize)

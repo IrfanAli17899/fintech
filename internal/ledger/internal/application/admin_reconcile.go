@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,7 +24,7 @@ const (
 // schemas: rails pages its records out through the port and the comparison
 // happens here. It reports; it never changes either side. Rows younger than
 // reconcileGrace as of `at` are skipped.
-func (s *LedgerService) Reconcile(ctx context.Context, at time.Time) (*domain.ReconciliationReport, error) {
+func (s *Service) Reconcile(ctx context.Context, at time.Time) (*domain.ReconciliationReport, error) {
 	rep := &domain.ReconciliationReport{At: at}
 	cutoff := at.Add(-reconcileGrace)
 	refundsAtRail := map[string]bool{} // ref + "/" + key
@@ -177,25 +176,6 @@ func checkAttempt(rep *domain.ReconciliationReport, a ports.AttemptRecord, state
 			case o.Decision == ports.DecisionBounced && child.Status != domain.TransactionStatusVoided:
 				diverge(domain.ReasonRefundNotVoided, childID, fmt.Sprintf("rail refused the refund, refund child is %s", child.Status))
 			}
-		}
-	}
-}
-
-// ReconcileJob runs Reconcile and logs what it found; wrap it in a scheduler.Loop.
-func (s *LedgerService) ReconcileJob(maxLogged int) func(context.Context) {
-	return func(ctx context.Context) {
-		rep, err := s.Reconcile(ctx, time.Now())
-		if err != nil {
-			log.Printf("reconcile: %v", err)
-			return
-		}
-		log.Printf("reconcile: %d findings over %d attempts", len(rep.Findings), rep.AttemptsChecked)
-		for i, f := range rep.Findings {
-			if i == maxLogged {
-				log.Printf("reconcile: %d more not logged; GET /admin/reconciliation", len(rep.Findings)-maxLogged)
-				break
-			}
-			log.Printf("reconcile: %s %s %s/%s txn=%s: %s", f.Kind, f.Reason, f.Rail, f.Ref, f.TransactionID, f.Detail)
 		}
 	}
 }

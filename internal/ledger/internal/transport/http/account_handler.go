@@ -9,11 +9,11 @@ import (
 )
 
 type AccountHandler struct {
-	accSvc *application.AccountService
+	svc *application.Service
 }
 
-func NewAccountHandler(accSvc *application.AccountService) *AccountHandler {
-	return &AccountHandler{accSvc}
+func NewAccountHandler(svc *application.Service) *AccountHandler {
+	return &AccountHandler{svc}
 }
 
 func (h *AccountHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -36,7 +36,7 @@ func (h *AccountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	acc, err := h.accSvc.ListByOwner(r.Context(), domain.OwnerType(q.OwnerType), q.OwnerID)
+	acc, err := h.svc.ListByOwner(r.Context(), domain.OwnerType(q.OwnerType), q.OwnerID)
 	httpx.OK(w, toAccountListResponse(acc), err)
 }
 
@@ -46,7 +46,7 @@ func (h *AccountHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	acc, err := h.accSvc.GetAccount(r.Context(), id)
+	acc, err := h.svc.GetAccount(r.Context(), id)
 	httpx.OK(w, toAccountResponse(acc), err)
 }
 
@@ -56,7 +56,7 @@ func (h *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	acc, err := h.accSvc.CreateAccount(r.Context(), req.toDomain())
+	acc, err := h.svc.CreateAccount(r.Context(), req.toDomain())
 	httpx.Created(w, toAccountResponse(acc), err)
 }
 
@@ -66,7 +66,7 @@ func (h *AccountHandler) GetAccountBalance(w http.ResponseWriter, r *http.Reques
 		httpx.WriteError(w, err)
 		return
 	}
-	balance, err := h.accSvc.GetAccountBalance(r.Context(), id)
+	balance, err := h.svc.GetAccountBalance(r.Context(), id)
 	httpx.OK(w, toBalanceResponse(balance), err)
 }
 
@@ -81,6 +81,6 @@ func (h *AccountHandler) History(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	hist, err := h.accSvc.History(r.Context(), id, q.Before, q.Limit)
+	hist, err := h.svc.History(r.Context(), id, q.Before, q.Limit)
 	httpx.OK(w, toHistoryResponse(hist), err)
 }
