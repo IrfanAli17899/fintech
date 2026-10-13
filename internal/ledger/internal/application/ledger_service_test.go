@@ -1813,6 +1813,47 @@ func TestReconcile_HealthyFlowsReportNothing(t *testing.T) {
 	}
 }
 
+func TestWrites_RequireIdempotencyKey(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	posted := f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h1 := f.post(t, hold(ali, shop, 100, uuid.NewString()))
+	h2 := f.post(t, hold(ali, shop, 100, uuid.NewString()))
+
+	// two keyless writes on different holds: the second must not look like a
+	// reuse of the first
+	for _, id := range []uuid.UUID{h1.ID, h2.ID} {
+		if _, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: id}); !errdefs.Is(err, domain.CodeIdempotencyKeyRequired) {
+			t.Fatalf("capture: want IDEMPOTENCY_KEY_REQUIRED, got %v", err)
+		}
+		if _, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: id}); !errdefs.Is(err, domain.CodeIdempotencyKeyRequired) {
+			t.Fatalf("void: want IDEMPOTENCY_KEY_REQUIRED, got %v", err)
+		}
+	}
+	if _, _, err := f.svc.Reverse(f.ctx, application.ReverseCommand{Kind: string(kindRefund), OriginalID: posted.ID}); !errdefs.Is(err, domain.CodeIdempotencyKeyRequired) {
+		t.Fatalf("reverse: want IDEMPOTENCY_KEY_REQUIRED, got %v", err)
+	}
+}
+
+func TestVoid_ReturnsTheSummaryAReadWouldShow(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 300, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+
+	v, _, err := f.svc.Void(f.ctx, application.VoidCommand{HoldID: h.ID, IdempotencyKey: uuid.NewString()})
+	must(t, err)
+	if v.Summary.Total != 500 || v.Summary.Captured != 300 || v.Summary.Settlement != domain.SettlementPartiallySettled {
+		t.Fatalf("void result summary: %+v", v.Summary)
+	}
+}
+
 // ---- story 11b: kind is product-owned ----
 
 func TestPost_KindIsProductOwned(t *testing.T) {

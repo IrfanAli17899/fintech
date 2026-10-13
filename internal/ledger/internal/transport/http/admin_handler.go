@@ -2,18 +2,17 @@ package transporthttp
 
 import (
 	"net/http"
-	"time"
 
-	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 
 type AdminHandler struct {
-	svc *application.Service
+	admin api.LedgerAdmin
 }
 
-func NewAdminHandler(svc *application.Service) *AdminHandler {
-	return &AdminHandler{svc: svc}
+func NewAdminHandler(admin api.LedgerAdmin) *AdminHandler {
+	return &AdminHandler{admin: admin}
 }
 
 func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -23,16 +22,16 @@ func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *AdminHandler) Reconcile(w http.ResponseWriter, r *http.Request) {
-	rep, err := h.svc.Reconcile(r.Context(), time.Now())
+	rep, err := h.admin.Reconcile(r.Context())
 	httpx.OK(w, toReconciliationResponse(rep), err)
 }
 
 func (h *AdminHandler) RebuildBalances(w http.ResponseWriter, r *http.Request) {
-	err := h.svc.RebuildBalances(r.Context())
+	err := h.admin.RebuildBalances(r.Context())
 	httpx.NoContent(w, err)
 }
 
 func (h *AdminHandler) VerifyBalances(w http.ResponseWriter, r *http.Request) {
-	ms, err := h.svc.VerifyBalances(r.Context())
+	ms, err := h.admin.VerifyBalances(r.Context())
 	httpx.OK(w, toVerifyBalancesResponse(ms), err)
 }

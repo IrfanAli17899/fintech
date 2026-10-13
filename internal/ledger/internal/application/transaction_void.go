@@ -37,6 +37,12 @@ func (s *Service) Void(ctx context.Context, cmd VoidCommand) (*domain.Transactio
 	if err != nil {
 		return nil, false, err
 	}
+	if !replayed {
+		// the locked row carries no summary; return what a read would show
+		if voided, err = s.loadTransaction(ctx, s.stores.Transactions, s.stores.Entries, voided.ID); err != nil {
+			return nil, false, err
+		}
+	}
 	if !cmd.System && voided.RailBacked() && voided.Status == domain.TransactionStatusPending {
 		if err := s.cancelAtRail(ctx, voided); err != nil {
 			return voided, replayed, err

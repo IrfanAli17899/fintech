@@ -20,6 +20,9 @@ type replay struct {
 // different payload. Must be called on a tx-bound repo; the caller links the
 // key to its result with SetResource before commit.
 func claimKey(ctx context.Context, keys *persistence.IdempotencyRepo, key, hash string, rt domain.ResourceType) (*replay, error) {
+	if key == "" {
+		return nil, domain.ErrIdempotencyKeyRequired()
+	}
 	_, err := keys.Insert(ctx, key, hash, rt)
 	if err == nil {
 		return nil, nil

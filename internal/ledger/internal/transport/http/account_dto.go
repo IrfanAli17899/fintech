@@ -4,8 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
@@ -51,13 +50,8 @@ type createAccountRequest struct {
 	Type      string `json:"type"`
 }
 
-func (r createAccountRequest) toDomain() domain.Account {
-	return domain.Account{
-		OwnerType: domain.OwnerType(r.OwnerType),
-		OwnerID:   r.OwnerID,
-		Currency:  r.Currency,
-		Type:      domain.AccountType(r.Type),
-	}
+func (r createAccountRequest) toCommand() api.CreateAccount {
+	return api.CreateAccount{OwnerType: r.OwnerType, OwnerID: r.OwnerID, Currency: r.Currency, Type: r.Type}
 }
 
 type accountResponse struct {
@@ -79,54 +73,35 @@ type balanceResponse struct {
 	AsOf       time.Time `json:"as_of"`
 }
 
-func toAccountResponse(a *domain.Account) *accountResponse {
-	if a == nil {
-		return nil
-	}
-	return &accountResponse{
-		ID:        a.ID,
-		OwnerType: string(a.OwnerType),
-		OwnerID:   a.OwnerID,
-		Currency:  a.Currency,
-		Type:      string(a.Type),
-		CreatedAt: a.CreatedAt,
+func toAccountResponse(a api.Account) accountResponse {
+	return accountResponse{
+		ID: a.ID, OwnerType: a.OwnerType, OwnerID: a.OwnerID,
+		Currency: a.Currency, Type: a.Type, CreatedAt: a.CreatedAt,
 	}
 }
 
-func toAccountListResponse(accs []domain.Account) []accountResponse {
+func toAccountListResponse(accs []api.Account) []accountResponse {
 	out := make([]accountResponse, len(accs))
-	for i := range accs {
-		out[i] = *toAccountResponse(&accs[i])
+	for i, a := range accs {
+		out[i] = toAccountResponse(a)
 	}
 	return out
 }
 
-func toBalanceResponse(b *domain.Balance) *balanceResponse {
-	if b == nil {
-		return nil
-	}
-	return &balanceResponse{
-		AccountID:  b.AccountID,
-		Currency:   b.Currency,
-		Posted:     b.Posted,
-		PendingIn:  b.PendingIn,
-		PendingOut: b.PendingOut,
-		Available:  b.Available,
-		AsOf:       b.AsOf,
+func toBalanceResponse(b api.Balance) balanceResponse {
+	return balanceResponse{
+		AccountID: b.AccountID, Currency: b.Currency, Posted: b.Posted,
+		PendingIn: b.PendingIn, PendingOut: b.PendingOut, Available: b.Available, AsOf: b.AsOf,
 	}
 }
 
-func toHistoryResponse(h *application.History) *historyResponse {
-	if h == nil {
-		return nil
-	}
+func toHistoryResponse(h api.HistoryPage) historyResponse {
 	out := make([]accountEntryResponse, len(h.Entries))
 	for i, e := range h.Entries {
 		out[i] = accountEntryResponse{
-			Seq: e.Seq, Amount: e.Amount, Direction: string(e.Direction), CreatedAt: e.CreatedAt, PostedAt: e.PostedAt,
-			TransactionID: e.TransactionID, Kind: string(e.Kind), Status: string(e.Status),
-			Rail: e.Rail, ParentID: e.ParentID,
+			Seq: e.Seq, Amount: e.Amount, Direction: e.Direction, CreatedAt: e.CreatedAt, PostedAt: e.PostedAt,
+			TransactionID: e.TransactionID, Kind: e.Kind, Status: e.Status, Rail: e.Rail, ParentID: e.ParentID,
 		}
 	}
-	return &historyResponse{Entries: out, NextBefore: h.NextBefore}
+	return historyResponse{Entries: out, NextBefore: h.NextBefore}
 }

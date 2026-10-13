@@ -2,50 +2,49 @@ package domain
 
 import (
 	"github.com/google/uuid"
+	"github.com/irfanali17899/fintech/internal/ledger/codes"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
 var (
 	// accounts
-	CodeAccountExists      = "ACCOUNT_EXISTS"
-	CodeAccountNotFound    = "ACCOUNT_NOT_FOUND"
-	CodeInvalidAccountType = "INVALID_ACCOUNT_TYPE"
-	CodeInvalidOwnerType   = "INVALID_OWNER_TYPE"
-	CodeInvalidCurrency    = "INVALID_CURRENCY"
-	CodeOwnerIDRequired    = "OWNER_ID_REQUIRED"
+	CodeAccountExists      = codes.AccountExists
+	CodeAccountNotFound    = codes.AccountNotFound
+	CodeInvalidAccountType = codes.InvalidAccountType
+	CodeInvalidOwnerType   = codes.InvalidOwnerType
+	CodeInvalidCurrency    = codes.InvalidCurrency
+	CodeOwnerIDRequired    = codes.OwnerIDRequired
 
 	// transactions
-	CodeTransactionExists        = "TRANSACTION_EXISTS"
-	CodeTransactionNotFound      = "TRANSACTION_NOT_FOUND"
-	CodeTransactionUnbalanced    = "TRANSACTION_UNBALANCED"
-	CodeInvalidTransactionKind   = "INVALID_TRANSACTION_KIND"
-	CodeIdempotencyKeyRequired   = "IDEMPOTENCY_KEY_REQUIRED"
-	CodeTooFewEntries            = "TOO_FEW_ENTRIES"
-	CodeInvalidEntryDirection    = "INVALID_ENTRY_DIRECTION"
-	CodeInvalidAmount            = "INVALID_AMOUNT"
-	CodeAmountTooLarge           = "AMOUNT_TOO_LARGE"
-	CodeCurrencyMismatch         = "CURRENCY_MISMATCH"
-	CodeAccountNetZero           = "ACCOUNT_NET_ZERO"
-	CodeInsufficientFunds        = "INSUFFICIENT_FUNDS"
-	CodeTransactionNotReversible = "TRANSACTION_NOT_REVERSIBLE"
-	CodeReversalExceedsOriginal  = "REVERSAL_EXCEEDS_ORIGINAL"
-	CodeInvalidTransactionStatus = "INVALID_TRANSACTION_STATUS"
-	CodeTransactionNotPending    = "TRANSACTION_NOT_PENDING"
-	CodeCaptureExceedsHold       = "CAPTURE_EXCEEDS_HOLD"
-	CodeExpiryOnNonPending       = "EXPIRY_ON_NON_PENDING"
-	CodeUnknownRail              = "UNKNOWN_RAIL"
-	CodeRailFailed               = "RAIL_FAILED"
-	CodeRailNotReversible        = "RAIL_NOT_REVERSIBLE"
-	CodeRailManagedHold          = "RAIL_MANAGED_HOLD"
-	CodeInvalidRelation          = "INVALID_RELATION"
-	CodeRelationWithoutParent    = "RELATION_WITHOUT_PARENT"
-	CodeRailCannotCancel         = "RAIL_CANNOT_CANCEL"
-	CodeHoldAlreadySettling      = "HOLD_ALREADY_SETTLING"
+	CodeTransactionNotFound      = codes.TransactionNotFound
+	CodeTransactionUnbalanced    = codes.TransactionUnbalanced
+	CodeInvalidTransactionKind   = codes.InvalidTransactionKind
+	CodeIdempotencyKeyRequired   = codes.IdempotencyKeyRequired
+	CodeTooFewEntries            = codes.TooFewEntries
+	CodeInvalidEntryDirection    = codes.InvalidEntryDirection
+	CodeInvalidAmount            = codes.InvalidAmount
+	CodeAmountTooLarge           = codes.AmountTooLarge
+	CodeCurrencyMismatch         = codes.CurrencyMismatch
+	CodeAccountNetZero           = codes.AccountNetZero
+	CodeInsufficientFunds        = codes.InsufficientFunds
+	CodeTransactionNotReversible = codes.TransactionNotReversible
+	CodeReversalExceedsOriginal  = codes.ReversalExceedsOriginal
+	CodeInvalidTransactionStatus = codes.InvalidTransactionStatus
+	CodeTransactionNotPending    = codes.TransactionNotPending
+	CodeCaptureExceedsHold       = codes.CaptureExceedsHold
+	CodeUnknownRail              = codes.UnknownRail
+	CodeRailFailed               = codes.RailFailed
+	CodeRailNotReversible        = codes.RailNotReversible
+	CodeRailManagedHold          = codes.RailManagedHold
+	CodeInvalidRelation          = codes.InvalidRelation
+	CodeRelationWithoutParent    = codes.RelationWithoutParent
+	CodeRailCannotCancel         = codes.RailCannotCancel
+	CodeHoldAlreadySettling      = codes.HoldAlreadySettling
 
 	// idempotency
-	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"
-	CodeIdempotencyKeyNotFound = "IDEMPOTENCY_KEY_NOT_FOUND"
-	CodeIdempotencyKeyReused   = "IDEMPOTENCY_KEY_REUSED"
+	CodeIdempotencyKeyExists   = "IDEMPOTENCY_KEY_EXISTS"    // internal: never reaches a caller
+	CodeIdempotencyKeyNotFound = "IDEMPOTENCY_KEY_NOT_FOUND" // internal: never reaches a caller
+	CodeIdempotencyKeyReused   = codes.IdempotencyKeyReused
 )
 
 // --- accounts ---
@@ -71,11 +70,6 @@ func ErrOwnerIDRequired() *errdefs.Error {
 }
 
 // --- transactions ---
-
-func ErrTransactionExists(key string) *errdefs.Error {
-	return errdefs.Conflictf(CodeTransactionExists,
-		"transaction with idempotency key %q already exists", key)
-}
 
 func ErrTransactionNotFound(id uuid.UUID) *errdefs.Error {
 	return errdefs.NotFoundf(CodeTransactionNotFound, "transaction %s not found", id)
@@ -150,11 +144,6 @@ func ErrTransactionNotPending(id uuid.UUID, status TransactionStatus) *errdefs.E
 func ErrCaptureExceedsHold(id uuid.UUID, held, requested int64) *errdefs.Error {
 	return errdefs.Validationf(CodeCaptureExceedsHold,
 		"hold %s is for %d, capture of %d requested", id, held, requested)
-}
-
-func ErrExpiryOnNonPending(s TransactionStatus) *errdefs.Error {
-	return errdefs.Validationf(CodeExpiryOnNonPending,
-		"expires_at is only valid on pending transactions, got %s", s)
 }
 
 func ErrUnknownRail(name string) *errdefs.Error {

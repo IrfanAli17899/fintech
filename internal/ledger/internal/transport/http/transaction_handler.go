@@ -3,16 +3,16 @@ package transporthttp
 import (
 	"net/http"
 
-	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 
 type TransactionHandler struct {
-	svc *application.Service
+	ledger api.Ledger
 }
 
-func NewTransactionHandler(svc *application.Service) *TransactionHandler {
-	return &TransactionHandler{svc}
+func NewTransactionHandler(ledger api.Ledger) *TransactionHandler {
+	return &TransactionHandler{ledger}
 }
 
 func (h *TransactionHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -29,7 +29,7 @@ func (h *TransactionHandler) GetTransaction(w http.ResponseWriter, r *http.Reque
 		httpx.WriteError(w, err)
 		return
 	}
-	txn, err := h.svc.GetTransaction(r.Context(), id)
+	txn, err := h.ledger.GetTransaction(r.Context(), id)
 	httpx.OK(w, toTransactionResponse(txn), err)
 }
 
@@ -40,12 +40,12 @@ func (h *TransactionHandler) CreateTransaction(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	t, replayed, err := h.svc.Post(r.Context(), req.toDomain())
-	if replayed {
-		httpx.OK(w, toTransactionResponse(t), err)
+	res, err := h.ledger.Post(r.Context(), req.toCommand())
+	if res.Replayed {
+		httpx.OK(w, toTransactionResponse(res.Transaction), err)
 		return
 	}
-	httpx.Created(w, toTransactionResponse(t), err)
+	httpx.Created(w, toTransactionResponse(res.Transaction), err)
 }
 
 func (h *TransactionHandler) ReverseTransaction(w http.ResponseWriter, r *http.Request) {
@@ -60,12 +60,12 @@ func (h *TransactionHandler) ReverseTransaction(w http.ResponseWriter, r *http.R
 		httpx.WriteError(w, err)
 		return
 	}
-	t, replayed, err := h.svc.Reverse(r.Context(), req.toCommand(id))
-	if replayed {
-		httpx.OK(w, toTransactionResponse(t), err)
+	res, err := h.ledger.Reverse(r.Context(), req.toCommand(id))
+	if res.Replayed {
+		httpx.OK(w, toTransactionResponse(res.Transaction), err)
 		return
 	}
-	httpx.Created(w, toTransactionResponse(t), err)
+	httpx.Created(w, toTransactionResponse(res.Transaction), err)
 }
 
 func (h *TransactionHandler) CaptureTransaction(w http.ResponseWriter, r *http.Request) {
@@ -79,12 +79,12 @@ func (h *TransactionHandler) CaptureTransaction(w http.ResponseWriter, r *http.R
 		httpx.WriteError(w, err)
 		return
 	}
-	t, replayed, err := h.svc.Capture(r.Context(), req.toCommand(id))
-	if replayed {
-		httpx.OK(w, toTransactionResponse(t), err)
+	res, err := h.ledger.Capture(r.Context(), req.toCommand(id))
+	if res.Replayed {
+		httpx.OK(w, toTransactionResponse(res.Transaction), err)
 		return
 	}
-	httpx.Created(w, toTransactionResponse(t), err)
+	httpx.Created(w, toTransactionResponse(res.Transaction), err)
 }
 
 func (h *TransactionHandler) VoidTransaction(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +98,6 @@ func (h *TransactionHandler) VoidTransaction(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, err)
 		return
 	}
-	t, _, err := h.svc.Void(r.Context(), req.toCommand(id))
-	httpx.OK(w, toTransactionResponse(t), err)
+	res, err := h.ledger.Void(r.Context(), req.toCommand(id))
+	httpx.OK(w, toTransactionResponse(res.Transaction), err)
 }

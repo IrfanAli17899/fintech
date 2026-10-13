@@ -4,8 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 )
 
 // ---- requests ----
@@ -25,21 +24,17 @@ type createTransactionRequest struct {
 	Entries        []entryRequest `json:"entries"`
 }
 
-func (r createTransactionRequest) toDomain() domain.Transaction {
-	entries := make([]domain.Entry, len(r.Entries))
+func (r createTransactionRequest) toCommand() api.PostTransaction {
+	entries := make([]api.EntryInput, len(r.Entries))
 	for i, e := range r.Entries {
-		entries[i] = domain.Entry{
-			AccountID: e.AccountID,
-			Amount:    e.Amount,
-			Direction: domain.EntryDirection(e.Direction),
-		}
+		entries[i] = api.EntryInput{AccountID: e.AccountID, Amount: e.Amount, Direction: e.Direction}
 	}
-	return domain.Transaction{
-		Kind:           domain.TransactionKind(r.Kind),
-		Status:         domain.TransactionStatus(r.Status),
+	return api.PostTransaction{
+		IdempotencyKey: r.IdempotencyKey,
+		Kind:           r.Kind,
+		Status:         r.Status,
 		Rail:           r.Rail,
 		ExpiresAt:      r.ExpiresAt,
-		IdempotencyKey: r.IdempotencyKey,
 		Entries:        entries,
 	}
 }
@@ -50,13 +45,8 @@ type reverseTransactionRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func (r reverseTransactionRequest) toCommand(originalID uuid.UUID) application.ReverseCommand {
-	return application.ReverseCommand{
-		Kind:           r.Kind,
-		OriginalID:     originalID,
-		Amount:         r.Amount,
-		IdempotencyKey: r.IdempotencyKey,
-	}
+func (r reverseTransactionRequest) toCommand(originalID uuid.UUID) api.Reverse {
+	return api.Reverse{IdempotencyKey: r.IdempotencyKey, TransactionID: originalID, Kind: r.Kind, Amount: r.Amount}
 }
 
 type captureTransactionRequest struct {
@@ -64,8 +54,8 @@ type captureTransactionRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func (r captureTransactionRequest) toCommand(holdID uuid.UUID) application.CaptureCommand {
-	return application.CaptureCommand{HoldID: holdID, Amount: r.Amount, IdempotencyKey: r.IdempotencyKey}
+func (r captureTransactionRequest) toCommand(holdID uuid.UUID) api.Capture {
+	return api.Capture{IdempotencyKey: r.IdempotencyKey, HoldID: holdID, Amount: r.Amount}
 }
 
 type voidTransactionRequest struct {
@@ -73,8 +63,8 @@ type voidTransactionRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func (r voidTransactionRequest) toCommand(holdID uuid.UUID) application.VoidCommand {
-	return application.VoidCommand{HoldID: holdID, Reason: r.Reason, IdempotencyKey: r.IdempotencyKey}
+func (r voidTransactionRequest) toCommand(holdID uuid.UUID) api.Void {
+	return api.Void{IdempotencyKey: r.IdempotencyKey, HoldID: holdID, Reason: r.Reason}
 }
 
 // ---- responses ----
@@ -87,55 +77,42 @@ type entryResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type summaryResponse struct {
+	Total      int64  `json:"total"`
+	Captured   int64  `json:"captured"`
+	Reversed   int64  `json:"reversed"`
+	Remaining  int64  `json:"remaining"`
+	Settlement string `json:"settlement"`
+}
+
 type transactionResponse struct {
 	ID           uuid.UUID       `json:"id"`
 	Kind         string          `json:"kind"`
-	Relation     *string         `json:"relation,omitempty"`
+	Relation     string          `json:"relation,omitempty"`
 	ParentID     *uuid.UUID      `json:"parent_id,omitempty"`
 	Status       string          `json:"status"`
-	StatusReason *string         `json:"status_reason,omitempty"`
+	StatusReason string          `json:"status_reason,omitempty"`
 	Rail         string          `json:"rail"`
 	RailRef      string          `json:"rail_ref,omitempty"`
 	ExpiresAt    *time.Time      `json:"expires_at,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	PostedAt     *time.Time      `json:"posted_at,omitempty"`
 	Entries      []entryResponse `json:"entries"`
+	Summary      summaryResponse `json:"summary"`
 }
 
-func toTransactionResponse(t *domain.Transaction) *transactionResponse {
-	if t == nil {
-		return nil
-	}
+func toTransactionResponse(t api.Transaction) transactionResponse {
 	entries := make([]entryResponse, len(t.Entries))
 	for i, e := range t.Entries {
-		entries[i] = entryResponse{
-			ID:        e.ID,
-			AccountID: e.AccountID,
-			Amount:    e.Amount,
-			Direction: string(e.Direction),
-			CreatedAt: e.CreatedAt,
-		}
+		entries[i] = entryResponse{ID: e.ID, AccountID: e.AccountID, Amount: e.Amount, Direction: e.Direction, CreatedAt: e.CreatedAt}
 	}
-	return &transactionResponse{
-		ID:           t.ID,
-		Kind:         string(t.Kind),
-		Relation:     relationStr(t.Relation),
-		ParentID:     t.ParentID,
-		Status:       string(t.Status),
-		StatusReason: t.StatusReason,
-		Rail:         t.Rail,
-		RailRef:      t.RailRef,
-		ExpiresAt:    t.ExpiresAt,
-		CreatedAt:    t.CreatedAt,
-		PostedAt:     t.PostedAt,
-		Entries:      entries,
+	return transactionResponse{
+		ID: t.ID, Kind: t.Kind, Relation: t.Relation, ParentID: t.ParentID,
+		Status: t.Status, StatusReason: t.StatusReason, Rail: t.Rail, RailRef: t.RailRef,
+		ExpiresAt: t.ExpiresAt, CreatedAt: t.CreatedAt, PostedAt: t.PostedAt, Entries: entries,
+		Summary: summaryResponse{
+			Total: t.Summary.Total, Captured: t.Summary.Captured, Reversed: t.Summary.Reversed,
+			Remaining: t.Summary.Remaining, Settlement: t.Summary.Settlement,
+		},
 	}
-}
-
-func relationStr(r *domain.TransactionRelation) *string {
-	if r == nil {
-		return nil
-	}
-	s := string(*r)
-	return &s
 }

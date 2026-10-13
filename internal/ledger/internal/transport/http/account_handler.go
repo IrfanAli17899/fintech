@@ -3,17 +3,16 @@ package transporthttp
 import (
 	"net/http"
 
-	"github.com/irfanali17899/fintech/internal/ledger/internal/application"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 	"github.com/irfanali17899/fintech/pkg/httpx"
 )
 
 type AccountHandler struct {
-	svc *application.Service
+	ledger api.Ledger
 }
 
-func NewAccountHandler(svc *application.Service) *AccountHandler {
-	return &AccountHandler{svc}
+func NewAccountHandler(ledger api.Ledger) *AccountHandler {
+	return &AccountHandler{ledger}
 }
 
 func (h *AccountHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -36,7 +35,7 @@ func (h *AccountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	acc, err := h.svc.ListByOwner(r.Context(), domain.OwnerType(q.OwnerType), q.OwnerID)
+	acc, err := h.ledger.ListAccounts(r.Context(), api.AccountQuery{OwnerType: q.OwnerType, OwnerID: q.OwnerID})
 	httpx.OK(w, toAccountListResponse(acc), err)
 }
 
@@ -46,7 +45,7 @@ func (h *AccountHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	acc, err := h.svc.GetAccount(r.Context(), id)
+	acc, err := h.ledger.GetAccount(r.Context(), id)
 	httpx.OK(w, toAccountResponse(acc), err)
 }
 
@@ -56,7 +55,7 @@ func (h *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	acc, err := h.svc.CreateAccount(r.Context(), req.toDomain())
+	acc, err := h.ledger.CreateAccount(r.Context(), req.toCommand())
 	httpx.Created(w, toAccountResponse(acc), err)
 }
 
@@ -66,7 +65,7 @@ func (h *AccountHandler) GetAccountBalance(w http.ResponseWriter, r *http.Reques
 		httpx.WriteError(w, err)
 		return
 	}
-	balance, err := h.svc.GetAccountBalance(r.Context(), id)
+	balance, err := h.ledger.Balance(r.Context(), id)
 	httpx.OK(w, toBalanceResponse(balance), err)
 }
 
@@ -81,6 +80,6 @@ func (h *AccountHandler) History(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
-	hist, err := h.svc.History(r.Context(), id, q.Before, q.Limit)
+	hist, err := h.ledger.History(r.Context(), id, api.Page{Before: q.Before, Limit: q.Limit})
 	httpx.OK(w, toHistoryResponse(hist), err)
 }

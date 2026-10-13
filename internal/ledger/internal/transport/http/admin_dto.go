@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/api"
 )
 
 type sumsResponse struct {
@@ -25,23 +25,16 @@ type verifyBalancesResponse struct {
 	Mismatches []balanceMismatchResponse `json:"mismatches"`
 }
 
-func toSumsResponse(s domain.AccountSums) sumsResponse {
-	return sumsResponse{Debits: s.Debits, Credits: s.Credits}
+func toSumsResponse(s api.Sums) sumsResponse {
+	return sumsResponse{Debits: s.Debits, Credits: s.Credits, PendingDebits: s.PendingDebits, PendingCredits: s.PendingCredits}
 }
 
-func toVerifyBalancesResponse(ms []domain.BalanceMismatch) *verifyBalancesResponse {
-	if ms == nil {
-		return nil
-	}
+func toVerifyBalancesResponse(ms []api.BalanceMismatch) verifyBalancesResponse {
 	out := make([]balanceMismatchResponse, len(ms))
 	for i, m := range ms {
-		out[i] = balanceMismatchResponse{
-			AccountID: m.AccountID,
-			Cached:    toSumsResponse(m.Cached),
-			Live:      toSumsResponse(m.Live),
-		}
+		out[i] = balanceMismatchResponse{AccountID: m.AccountID, Cached: toSumsResponse(m.Cached), Live: toSumsResponse(m.Live)}
 	}
-	return &verifyBalancesResponse{Healthy: len(ms) == 0, Mismatches: out}
+	return verifyBalancesResponse{Healthy: len(ms) == 0, Mismatches: out}
 }
 
 type findingResponse struct {
@@ -61,22 +54,19 @@ type reconciliationResponse struct {
 	Findings        []findingResponse `json:"findings"`
 }
 
-func toReconciliationResponse(r *domain.ReconciliationReport) *reconciliationResponse {
-	if r == nil {
-		return nil
-	}
-	out := &reconciliationResponse{
-		At: r.At, Clean: r.Clean(), AttemptsChecked: r.AttemptsChecked,
+func toReconciliationResponse(r api.ReconciliationReport) reconciliationResponse {
+	out := reconciliationResponse{
+		At: r.At, Clean: len(r.Findings) == 0, AttemptsChecked: r.AttemptsChecked,
 		Counts: map[string]int{}, Findings: make([]findingResponse, len(r.Findings)),
 	}
 	for i, f := range r.Findings {
-		key := string(f.Kind)
+		key := f.Kind
 		if f.Reason != "" {
 			key += ":" + f.Reason
 		}
 		out.Counts[key]++
 		out.Findings[i] = findingResponse{
-			Kind: string(f.Kind), Reason: f.Reason, Rail: f.Rail, Ref: f.Ref,
+			Kind: f.Kind, Reason: f.Reason, Rail: f.Rail, Ref: f.Ref,
 			TransactionID: f.TransactionID, Detail: f.Detail,
 		}
 	}
