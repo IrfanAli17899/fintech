@@ -28,3 +28,7 @@
   relation IS NOT NULL)
 - 011 should have shipped with both. Migrations are append-only from story 15,
   so the fix is a new migration, not an edit to 011
+
+> Later revised: migrations became append-only from the v0.1.0 baseline. Before
+> a first release nobody else has run them, so squashing was the honest
+> workflow; the backfill and constraint above are part of that baseline.

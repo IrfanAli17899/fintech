@@ -138,6 +138,9 @@ just the select.
 - the outbox is the planned fix for initiating a rail inside the ledger's
   transaction: commit pending first, then initiate. It removes the second
   connection and the orphan window
+- docs: this file and the code always describe the system as it is now, and
+  every change updates them. `docs/stories` is a dated journal of why; a story
+  is never rewritten to match later code
 - deployment shapes: in-process today; later, `cmd/ledger-svc` with a gRPC
   adapter implementing the same api interfaces
 

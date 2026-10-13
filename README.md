@@ -57,11 +57,12 @@ flowchart LR
 - The dependency rules are tested: `internal/archtest` fails the build when a
   layer reaches somewhere it should not.
 
-Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the
-decisions behind them, and [docs/stories](docs/stories) for how it was built,
-one story at a time. The best single read is the "Found on first run" section
+Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it works and the
+decisions behind it. [docs/stories](docs/stories/README.md) is the build
+journal: why it ended up this way, one story at a time, with five picked as
+the place to start. The best single read is the "Found on first run" section
 of [story 21c](docs/stories/021c-reconciliation.md): the reconciler's first run
-found a real bug in the migration written two stories earlier.
+found a real bug in a migration written two stories earlier.
 
 ## Run it
 
