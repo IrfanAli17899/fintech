@@ -13,12 +13,6 @@ db-reset:
 db-shell:
 	docker compose exec postgres psql -U fintech -d fintech
 
-migrate-up:
-	migrate -path migrations -database "$(DB_URL)" up
-
-migrate-down:
-	migrate -path migrations -database "$(DB_URL)" down 1
-
 TEST_DB_URL ?= postgres://fintech:fintech@localhost:5432/fintech_test?sslmode=disable
 
 # Tests never touch the dev database: they leave orphans and divergences by

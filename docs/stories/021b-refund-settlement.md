@@ -35,10 +35,7 @@ refunds, and a voided hold says whether it was settled or cancelled.
 
 **Cutover**
 
-- before 21a (c33ec3f), rail refunds posted directly; they are posted children
-  and count correctly
-- between 21a and 21b, settled rail refunds are voided children with a posted
-  capture grandchild, and do not count toward their original's total. These
-  exist only in development databases (22 locally); `make db-reset` clears
-  them, and 21c reports them
-- from 21b on, a settled refund is a posted child
+- between 21a and 21b, settled rail refunds were voided children with a
+  posted capture grandchild, so they did not count toward their original's
+  total. That data only ever existed in development databases and was
+  cleared by the v0.1.0 baseline reset

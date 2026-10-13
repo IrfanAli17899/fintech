@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fintech
+          POSTGRES_PASSWORD: fintech
+          POSTGRES_DB: fintech_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fintech -d fintech_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://fintech:fintech@localhost:5432/fintech_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      # -p 1: packages share one database
+      - name: test
+        run: go test -count=1 -race -p 1 ./...
