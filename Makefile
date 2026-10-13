@@ -28,6 +28,10 @@ test-db:
 	  "SELECT 1 FROM pg_database WHERE datname = 'fintech_test'" | grep -q 1 || \
 	docker compose exec -T postgres psql -U fintech -d fintech -c "CREATE DATABASE fintech_test"
 
+test-db-reset:
+	docker compose exec -T postgres psql -U fintech -d fintech -c "DROP DATABASE IF EXISTS fintech_test"
+	$(MAKE) test-db
+
 # -p 1: tests share a database; parallel packages race on rail outcomes.
 # Do not remove until each package gets its own database (testcontainers).
 test: test-db

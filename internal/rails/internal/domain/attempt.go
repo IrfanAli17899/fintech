@@ -12,7 +12,6 @@ const (
 	AttemptInitiated AttemptState = "initiated"
 	AttemptSettled   AttemptState = "settled"
 	AttemptBounced   AttemptState = "bounced"
-	AttemptReversed  AttemptState = "reversed"
 	AttemptCancelled AttemptState = "cancelled"
 )
 

@@ -1,1 +1,0 @@
-DROP VIEW IF EXISTS ledger.transaction_summaries;

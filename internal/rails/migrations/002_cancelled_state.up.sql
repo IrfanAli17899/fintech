@@ -1,1 +1,0 @@
-ALTER TYPE rails.attempt_state ADD VALUE 'cancelled';
