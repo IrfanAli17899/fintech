@@ -225,17 +225,17 @@ func (r *TransactionRepo) ListByParent(ctx context.Context, parentID uuid.UUID) 
 	return out, nil
 }
 
+// Summary returns the raw sums for a transaction; domain.Summarize derives the rest.
 func (r *TransactionRepo) Summary(ctx context.Context, id uuid.UUID) (domain.TransactionSummary, error) {
 	var s domain.TransactionSummary
 	err := r.db.QueryRowContext(ctx,
-		`SELECT total, captured, reversed, settlement FROM ledger.transaction_summaries WHERE id = $1`, id,
-	).Scan(&s.Total, &s.Captured, &s.Reversed, &s.Settlement)
+		`SELECT total, captured, reversed FROM ledger.transaction_summaries WHERE id = $1`, id,
+	).Scan(&s.Total, &s.Captured, &s.Reversed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, domain.ErrTransactionNotFound(id)
 	}
 	if err != nil {
 		return s, errdefs.Internalf(err, "transaction summary")
 	}
-	s.Remaining = s.Total - s.Captured - s.Reversed
 	return s, nil
 }

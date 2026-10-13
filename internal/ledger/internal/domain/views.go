@@ -6,7 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// TransactionSummary is derived from a transaction's posted children.
+// TransactionSummary is derived from a transaction's posted children. Storage
+// supplies Total, Captured and Reversed; Summarize derives the rest.
 type TransactionSummary struct {
 	Total     int64
 	Captured  int64 // posted by children that capture this hold
@@ -16,6 +17,29 @@ type TransactionSummary struct {
 	// settled_via_children (captured = total) or partially_settled.
 	Settlement string
 }
+
+const (
+	SettlementSettledViaChildren = "settled_via_children"
+	SettlementPartiallySettled   = "partially_settled"
+)
+
+// Summarize derives Remaining and Settlement from the raw sums. A hold settles
+// by capture children and is then voided, so "voided" alone cannot tell a
+// settled hold from a cancelled one; Settlement says which.
+func Summarize(status TransactionStatus, raw TransactionSummary) TransactionSummary {
+	s := raw
+	s.Remaining = s.Total - s.Captured - s.Reversed
+	switch {
+	case status == TransactionStatusVoided && s.Total > 0 && s.Captured >= s.Total:
+		s.Settlement = SettlementSettledViaChildren
+	case status == TransactionStatusVoided && s.Captured > 0:
+		s.Settlement = SettlementPartiallySettled
+	default:
+		s.Settlement = string(status)
+	}
+	return s
+}
+
 type AccountEntry struct {
 	Seq           int64
 	Amount        int64

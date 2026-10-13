@@ -133,7 +133,7 @@ func (s *Service) write(ctx context.Context, r persistence.Stores, t domain.Tran
 			return nil, err
 		}
 	}
-	created.Summary = domain.TransactionSummary{Total: created.Total(), Remaining: created.Total(), Settlement: string(created.Status)}
+	created.Summary = domain.Summarize(created.Status, domain.TransactionSummary{Total: created.Total()})
 	return created, nil
 }
 
@@ -146,9 +146,11 @@ func (s *Service) loadTransaction(ctx context.Context, txns *persistence.Transac
 	if t.Entries, err = ents.ListByTransaction(ctx, id); err != nil {
 		return nil, err
 	}
-	if t.Summary, err = txns.Summary(ctx, id); err != nil {
+	raw, err := txns.Summary(ctx, id)
+	if err != nil {
 		return nil, err
 	}
+	t.Summary = domain.Summarize(t.Status, raw)
 	return t, nil
 }
 

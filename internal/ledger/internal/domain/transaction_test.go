@@ -187,3 +187,27 @@ func TestTransaction_Reverse(t *testing.T) {
 		}
 	})
 }
+
+func TestSummarize(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     TransactionStatus
+		raw        TransactionSummary
+		settlement string
+		remaining  int64
+	}{
+		{"posted", TransactionStatusPosted, TransactionSummary{Total: 500, Reversed: 200}, "posted", 300},
+		{"pending", TransactionStatusPending, TransactionSummary{Total: 500, Captured: 100}, "pending", 400},
+		{"voided, nothing captured", TransactionStatusVoided, TransactionSummary{Total: 500}, "voided", 500},
+		{"voided after partial capture", TransactionStatusVoided, TransactionSummary{Total: 500, Captured: 300}, SettlementPartiallySettled, 200},
+		{"voided after full capture", TransactionStatusVoided, TransactionSummary{Total: 500, Captured: 500}, SettlementSettledViaChildren, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := Summarize(c.status, c.raw)
+			if s.Settlement != c.settlement || s.Remaining != c.remaining {
+				t.Fatalf("settlement=%s remaining=%d, want %s %d", s.Settlement, s.Remaining, c.settlement, c.remaining)
+			}
+		})
+	}
+}
