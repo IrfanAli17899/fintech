@@ -2,9 +2,10 @@ package application
 
 import (
 	"context"
-	"database/sql"
 	"log"
 	"time"
+
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 )
 
 // ExpireHolds voids internal pending transactions past their expiry, at most
@@ -16,9 +17,8 @@ func (s *Service) ExpireHolds(ctx context.Context, now time.Time, batchSize int)
 	voided := 0
 	for voided < batchSize {
 		found := false
-		err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-			r := s.repos(tx)
-			id, ok, err := r.txns.NextExpiredHold(ctx, now)
+		err := s.uow.Do(ctx, func(r persistence.Stores) error {
+			id, ok, err := r.Transactions.NextExpiredHold(ctx, now)
 			if err != nil || !ok {
 				return err
 			}

@@ -72,15 +72,10 @@ func connectTestDB(t *testing.T) *database.DB {
 
 func setupWith(t *testing.T, db *database.DB, reg ports.RailRegistry) fixture {
 	t.Helper()
-	acc := persistence.NewAccountRepo(db.DB)
-	txn := persistence.NewTransactionRepo(db.DB)
-	ent := persistence.NewEntryRepo(db.DB)
-	bal := persistence.NewBalanceRepo(db.DB)
-	idem := persistence.NewIdempotencyRepo(db.DB)
-
+	stores := persistence.NewStores(db)
 	return fixture{
 		ctx: context.Background(),
-		svc: application.NewService(db, acc, txn, ent, bal, idem, reg),
+		svc: application.NewService(persistence.NewUnitOfWork(db, stores), stores, reg),
 	}
 }
 

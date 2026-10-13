@@ -21,13 +21,8 @@ type Module struct {
 }
 
 func New(db *database.DB, rails ports.RailRegistry) *Module {
-	accRepo := persistence.NewAccountRepo(db)
-	txnRepo := persistence.NewTransactionRepo(db)
-	entryRepo := persistence.NewEntryRepo(db)
-	balanceRepo := persistence.NewBalanceRepo(db)
-	idemRepo := persistence.NewIdempotencyRepo(db)
-
-	svc := application.NewService(db, accRepo, txnRepo, entryRepo, balanceRepo, idemRepo, rails)
+	stores := persistence.NewStores(db)
+	svc := application.NewService(persistence.NewUnitOfWork(db, stores), stores, rails)
 
 	return &Module{
 		db:  db,

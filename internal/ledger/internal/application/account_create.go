@@ -2,9 +2,9 @@ package application
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 )
 
 func (s *Service) CreateAccount(ctx context.Context, a domain.Account) (*domain.Account, error) {
@@ -15,9 +15,8 @@ func (s *Service) CreateAccount(ctx context.Context, a domain.Account) (*domain.
 	var created *domain.Account
 
 	// create account and its zero balance row
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		accounts := s.accRepo.WithTx(tx)
-		balances := s.balanceRepo.WithTx(tx)
+	err := s.uow.Do(ctx, func(r persistence.Stores) error {
+		accounts, balances := r.Accounts, r.Balances
 
 		acc, err := accounts.Create(ctx, a)
 		if err != nil {
@@ -35,9 +34,8 @@ func (s *Service) CreateAccount(ctx context.Context, a domain.Account) (*domain.
 }
 
 func (s *Service) SeedSystem(ctx context.Context) error {
-	return s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		accounts := s.accRepo.WithTx(tx)
-		balances := s.balanceRepo.WithTx(tx)
+	return s.uow.Do(ctx, func(r persistence.Stores) error {
+		accounts, balances := r.Accounts, r.Balances
 
 		ids, err := accounts.SeedAccounts(ctx)
 		if err != nil {

@@ -19,7 +19,7 @@ type History struct {
 
 // History returns an account's statement newest first, cursor-paginated on entry seq.
 func (s *Service) History(ctx context.Context, accountID uuid.UUID, beforeSeq int64, limit int) (*History, error) {
-	if _, err := s.accRepo.GetByID(ctx, accountID); err != nil {
+	if _, err := s.stores.Accounts.GetByID(ctx, accountID); err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
@@ -28,7 +28,7 @@ func (s *Service) History(ctx context.Context, accountID uuid.UUID, beforeSeq in
 	if limit > historyMaxLimit {
 		limit = historyMaxLimit
 	}
-	entries, err := s.entryRepo.ListByAccount(ctx, accountID, beforeSeq, limit)
+	entries, err := s.stores.Entries.ListByAccount(ctx, accountID, beforeSeq, limit)
 	if err != nil {
 		return nil, err
 	}

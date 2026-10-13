@@ -9,17 +9,17 @@ import (
 )
 
 func (s *Service) GetAccount(ctx context.Context, id uuid.UUID) (*domain.Account, error) {
-	return s.accRepo.GetByID(ctx, id)
+	return s.stores.Accounts.GetByID(ctx, id)
 }
 
 func (s *Service) GetAccountBalance(ctx context.Context, id uuid.UUID) (*domain.Balance, error) {
-	acc, err := s.accRepo.GetByID(ctx, id)
+	acc, err := s.stores.Accounts.GetByID(ctx, id)
 
 	if err != nil {
 		return nil, err
 	}
 
-	sums, err := s.balanceRepo.GetBalance(ctx, id)
+	sums, err := s.stores.Balances.GetBalance(ctx, id)
 
 	if err != nil {
 		return nil, err
@@ -36,5 +36,5 @@ func (s *Service) ListByOwner(ctx context.Context, ownerType domain.OwnerType, o
 	if !ownerType.Valid() {
 		return nil, domain.ErrInvalidOwnerType(ownerType)
 	}
-	return s.accRepo.ListByOwner(ctx, ownerType, ownerID)
+	return s.stores.Accounts.ListByOwner(ctx, ownerType, ownerID)
 }

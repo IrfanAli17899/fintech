@@ -2,11 +2,11 @@ package application
 
 import (
 	"context"
-	"database/sql"
 	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 )
 
 // System is set only by the outcome worker; it lets a capture or void act on
@@ -23,16 +23,15 @@ func (s *Service) Capture(ctx context.Context, cmd CaptureCommand) (*domain.Tran
 		created  *domain.Transaction
 		replayed bool
 	)
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		r := s.repos(tx)
+	err := s.uow.Do(ctx, func(r persistence.Stores) error {
 
 		hash := domain.HashOf("capture", cmd.HoldID.String(), strconv.FormatInt(cmd.Amount, 10))
-		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
+		rp, err := claimKey(ctx, r.Keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
 		if err != nil {
 			return err
 		}
 		if rp != nil {
-			created, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			created, err = s.loadTransaction(ctx, r.Transactions, r.Entries, rp.ResourceID)
 			replayed = true
 			return err
 		}
@@ -45,7 +44,7 @@ func (s *Service) Capture(ctx context.Context, cmd CaptureCommand) (*domain.Tran
 		if h.RailBacked() && !cmd.System {
 			return domain.ErrRailManagedHold(h.ID, h.Rail)
 		}
-		capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
+		capturedBy, err := r.Transactions.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
 		if err != nil {
 			return err
 		}
@@ -85,11 +84,11 @@ func (s *Service) Capture(ctx context.Context, cmd CaptureCommand) (*domain.Tran
 			return err
 		}
 		if captured+amount == held {
-			if err := r.txns.MarkVoided(ctx, h.ID, nil); err != nil {
+			if err := r.Transactions.MarkVoided(ctx, h.ID, nil); err != nil {
 				return err
 			}
 		}
-		return r.keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
+		return r.Keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
 	})
 	if err != nil {
 		return nil, false, err

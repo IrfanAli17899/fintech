@@ -2,11 +2,11 @@ package application
 
 import (
 	"context"
-	"database/sql"
 	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 	"github.com/irfanali17899/fintech/pkg/errdefs"
 )
 
@@ -33,21 +33,20 @@ func (s *Service) Reverse(ctx context.Context, cmd ReverseCommand) (*domain.Tran
 		replayed bool
 	)
 
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		r := s.repos(tx)
+	err := s.uow.Do(ctx, func(r persistence.Stores) error {
 
 		hash := domain.HashOf("reversal", cmd.OriginalID.String(), cmd.Kind, strconv.FormatInt(cmd.Amount, 10))
-		rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
+		rp, err := claimKey(ctx, r.Keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
 		if err != nil {
 			return err
 		}
 		if rp != nil {
-			created, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			created, err = s.loadTransaction(ctx, r.Transactions, r.Entries, rp.ResourceID)
 			replayed = true
 			return err
 		}
 
-		original, err := r.txns.LockByID(ctx, cmd.OriginalID)
+		original, err := r.Transactions.LockByID(ctx, cmd.OriginalID)
 		if err != nil {
 			return err
 		}
@@ -59,12 +58,12 @@ func (s *Service) Reverse(ctx context.Context, cmd ReverseCommand) (*domain.Tran
 				return domain.ErrRailNotReversible(original.ID, original.Rail)
 			}
 		}
-		original.Entries, err = r.entries.ListByTransaction(ctx, original.ID)
+		original.Entries, err = r.Entries.ListByTransaction(ctx, original.ID)
 		if err != nil {
 			return err
 		}
 
-		reversedBy, err := r.txns.ChildAmountsByAccount(ctx, original.ID, domain.RelationReverses)
+		reversedBy, err := r.Transactions.ChildAmountsByAccount(ctx, original.ID, domain.RelationReverses)
 		if err != nil {
 			return err
 		}
@@ -100,7 +99,7 @@ func (s *Service) Reverse(ctx context.Context, cmd ReverseCommand) (*domain.Tran
 		if err != nil {
 			return err
 		}
-		return r.keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
+		return r.Keys.SetResource(ctx, cmd.IdempotencyKey, created.ID)
 	})
 	if err != nil {
 		return nil, false, err
@@ -141,15 +140,14 @@ func (s *Service) postPending(ctx context.Context, id uuid.UUID, key string) (*d
 		posted   *domain.Transaction
 		replayed bool
 	)
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		r := s.repos(tx)
+	err := s.uow.Do(ctx, func(r persistence.Stores) error {
 
-		rp, err := claimKey(ctx, r.keys, key, domain.HashOf("post-pending", id.String()), domain.ResourceTransaction)
+		rp, err := claimKey(ctx, r.Keys, key, domain.HashOf("post-pending", id.String()), domain.ResourceTransaction)
 		if err != nil {
 			return err
 		}
 		if rp != nil {
-			posted, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			posted, err = s.loadTransaction(ctx, r.Transactions, r.Entries, rp.ResourceID)
 			replayed = true
 			return err
 		}
@@ -166,18 +164,18 @@ func (s *Service) postPending(ctx context.Context, id uuid.UUID, key string) (*d
 		if err := s.releaseReservation(ctx, r, pendingSums(*h)); err != nil {
 			return err
 		}
-		at, err := r.txns.MarkPosted(ctx, h.ID)
+		at, err := r.Transactions.MarkPosted(ctx, h.ID)
 		if err != nil {
 			return err
 		}
 		h.Status, h.PostedAt = domain.TransactionStatusPosted, &at
 		for acc, sums := range h.SumsByAccount() {
-			if err := r.balances.Apply(ctx, acc, sums); err != nil {
+			if err := r.Balances.Apply(ctx, acc, sums); err != nil {
 				return err
 			}
 		}
 		posted = h
-		return r.keys.SetResource(ctx, key, h.ID)
+		return r.Keys.SetResource(ctx, key, h.ID)
 	})
 	if err != nil {
 		return nil, false, err

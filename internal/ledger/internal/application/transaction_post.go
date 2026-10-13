@@ -2,9 +2,9 @@ package application
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 )
 
 // Post records a balanced transaction atomically. The bool is true when the
@@ -21,15 +21,14 @@ func (s *Service) Post(ctx context.Context, t domain.Transaction) (*domain.Trans
 		created  *domain.Transaction
 		replayed bool
 	)
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
-		r := s.repos(tx)
+	err := s.uow.Do(ctx, func(r persistence.Stores) error {
 
-		rp, err := claimKey(ctx, r.keys, t.IdempotencyKey, t.Hash(), domain.ResourceTransaction)
+		rp, err := claimKey(ctx, r.Keys, t.IdempotencyKey, t.Hash(), domain.ResourceTransaction)
 		if err != nil {
 			return err
 		}
 		if rp != nil {
-			created, err = s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+			created, err = s.loadTransaction(ctx, r.Transactions, r.Entries, rp.ResourceID)
 			replayed = true
 			return err
 		}
@@ -38,7 +37,7 @@ func (s *Service) Post(ctx context.Context, t domain.Transaction) (*domain.Trans
 		if err != nil {
 			return err
 		}
-		return r.keys.SetResource(ctx, t.IdempotencyKey, created.ID)
+		return r.Keys.SetResource(ctx, t.IdempotencyKey, created.ID)
 	})
 	if err != nil {
 		return nil, false, err

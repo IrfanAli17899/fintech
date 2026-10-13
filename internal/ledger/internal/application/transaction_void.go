@@ -2,11 +2,11 @@ package application
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 
 	"github.com/google/uuid"
 	"github.com/irfanali17899/fintech/internal/ledger/internal/domain"
+	"github.com/irfanali17899/fintech/internal/ledger/internal/persistence"
 	"github.com/irfanali17899/fintech/internal/ledger/ports"
 )
 
@@ -29,9 +29,9 @@ func (s *Service) Void(ctx context.Context, cmd VoidCommand) (*domain.Transactio
 		voided   *domain.Transaction
 		replayed bool
 	)
-	err := s.txRunner.InTx(ctx, func(tx *sql.Tx) error {
+	err := s.uow.Do(ctx, func(r persistence.Stores) error {
 		var err error
-		voided, replayed, err = s.voidLocked(ctx, s.repos(tx), cmd)
+		voided, replayed, err = s.voidLocked(ctx, r, cmd)
 		return err
 	})
 	if err != nil {
@@ -49,14 +49,14 @@ func (s *Service) Void(ctx context.Context, cmd VoidCommand) (*domain.Transactio
 // lock the hold, release what it still reserves. For a rail-backed hold it only
 // checks the rail can cancel and links the key; nothing changes until the rail
 // decides.
-func (s *Service) voidLocked(ctx context.Context, r txRepos, cmd VoidCommand) (*domain.Transaction, bool, error) {
+func (s *Service) voidLocked(ctx context.Context, r persistence.Stores, cmd VoidCommand) (*domain.Transaction, bool, error) {
 	hash := domain.HashOf("void", cmd.HoldID.String(), cmd.Reason)
-	rp, err := claimKey(ctx, r.keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
+	rp, err := claimKey(ctx, r.Keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
 	if err != nil {
 		return nil, false, err
 	}
 	if rp != nil {
-		t, err := s.loadTransaction(ctx, r.txns, r.entries, rp.ResourceID)
+		t, err := s.loadTransaction(ctx, r.Transactions, r.Entries, rp.ResourceID)
 		return t, true, err
 	}
 
@@ -75,10 +75,10 @@ func (s *Service) voidLocked(ctx context.Context, r txRepos, cmd VoidCommand) (*
 		if rail, ok := s.rails.Get(h.Rail); !ok || !rail.Properties().CanCancel {
 			return nil, false, domain.ErrRailCannotCancel(h.ID, h.Rail)
 		}
-		return h, false, r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
+		return h, false, r.Keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
 	}
 
-	capturedBy, err := r.txns.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
+	capturedBy, err := r.Transactions.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
 	if err != nil {
 		return nil, false, err
 	}
@@ -94,12 +94,12 @@ func (s *Service) voidLocked(ctx context.Context, r txRepos, cmd VoidCommand) (*
 	if cmd.Reason != "" {
 		reason = &cmd.Reason
 	}
-	if err := r.txns.MarkVoided(ctx, h.ID, reason); err != nil {
+	if err := r.Transactions.MarkVoided(ctx, h.ID, reason); err != nil {
 		return nil, false, err
 	}
 	h.Status = domain.TransactionStatusVoided
 	h.StatusReason = reason
-	return h, false, r.keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
+	return h, false, r.Keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
 }
 
 // cancelAtRail asks the rail to withdraw a pending transfer, outside any lock.

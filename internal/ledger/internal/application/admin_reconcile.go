@@ -37,7 +37,7 @@ func (s *Service) Reconcile(ctx context.Context, at time.Time) (*domain.Reconcil
 		if len(page) == 0 {
 			break
 		}
-		states, err := s.transactionRepo.States(ctx, idsIn(page))
+		states, err := s.stores.Transactions.States(ctx, idsIn(page))
 		if err != nil {
 			return nil, err
 		}
@@ -51,7 +51,7 @@ func (s *Service) Reconcile(ctx context.Context, at time.Time) (*domain.Reconcil
 		after = page[len(page)-1].Ref
 	}
 
-	pending, err := s.transactionRepo.PendingRailRefunds(ctx, cutoff)
+	pending, err := s.stores.Transactions.PendingRailRefunds(ctx, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (s *Service) Reconcile(ctx context.Context, at time.Time) (*domain.Reconcil
 		}
 	}
 
-	tb, err := s.entryRepo.TrialBalance(ctx)
+	tb, err := s.stores.Entries.TrialBalance(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (s *Service) Reconcile(ctx context.Context, at time.Time) (*domain.Reconcil
 			tb.Debits, tb.Credits, tb.PendingDebits, tb.PendingCredits)})
 	}
 
-	drift, err := s.balanceRepo.Verify(ctx)
+	drift, err := s.stores.Balances.Verify(ctx)
 	if err != nil {
 		return nil, err
 	}

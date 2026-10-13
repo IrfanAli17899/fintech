@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,25 +10,6 @@ import (
 	"github.com/irfanali17899/fintech/internal/ledger/ports"
 )
 
-// txRepos is the set of repos bound to one database transaction.
-type txRepos struct {
-	accounts *persistence.AccountRepo
-	txns     *persistence.TransactionRepo
-	entries  *persistence.EntryRepo
-	balances *persistence.BalanceRepo
-	keys     *persistence.IdempotencyRepo
-}
-
-func (s *Service) repos(tx *sql.Tx) txRepos {
-	return txRepos{
-		accounts: s.accRepo.WithTx(tx),
-		txns:     s.transactionRepo.WithTx(tx),
-		entries:  s.entryRepo.WithTx(tx),
-		balances: s.balanceRepo.WithTx(tx),
-		keys:     s.idemRepo.WithTx(tx),
-	}
-}
-
 // post runs a validated transaction through account resolution, the overdraft
 // check, the rail, and persistence. The caller owns the tx, the idempotency
 // claim, and any follow-up such as status flips or key linking.
@@ -37,7 +17,7 @@ func (s *Service) repos(tx *sql.Tx) txRepos {
 // A rail-backed post holds this tx's connection and Initiate opens a second
 // one for the rails tx, so the pool must exceed the number of concurrent
 // rail-backed posts. The outbox (capstone) removes the second connection.
-func (s *Service) post(ctx context.Context, r txRepos, t domain.Transaction) (*domain.Transaction, error) {
+func (s *Service) post(ctx context.Context, r persistence.Stores, t domain.Transaction) (*domain.Transaction, error) {
 	if t.ID == uuid.Nil {
 		t.ID = uuid.Must(uuid.NewV7())
 	}
@@ -62,9 +42,9 @@ func (s *Service) post(ctx context.Context, r txRepos, t domain.Transaction) (*d
 
 // resolveAccounts loads every account the transaction touches and enforces
 // existence and a single currency.
-func (s *Service) resolveAccounts(ctx context.Context, r txRepos, t domain.Transaction) (map[uuid.UUID]domain.Account, string, error) {
+func (s *Service) resolveAccounts(ctx context.Context, r persistence.Stores, t domain.Transaction) (map[uuid.UUID]domain.Account, string, error) {
 	ids := t.AccountIDs()
-	accMap, err := r.accounts.GetByIDs(ctx, ids)
+	accMap, err := r.Accounts.GetByIDs(ctx, ids)
 	if err != nil {
 		return nil, "", err
 	}
@@ -117,8 +97,8 @@ func (s *Service) initiateRail(ctx context.Context, t *domain.Transaction, curre
 // checkFunds locks the balance rows of every touched account (ids are sorted,
 // so concurrent posts acquire locks in the same order and cannot deadlock) and
 // rejects any liability debit that would overdraw.
-func (s *Service) checkFunds(ctx context.Context, r txRepos, t domain.Transaction, accMap map[uuid.UUID]domain.Account) error {
-	locked, err := r.balances.LockAndGet(ctx, t.AccountIDs())
+func (s *Service) checkFunds(ctx context.Context, r persistence.Stores, t domain.Transaction, accMap map[uuid.UUID]domain.Account) error {
+	locked, err := r.Balances.LockAndGet(ctx, t.AccountIDs())
 	if err != nil {
 		return err
 	}
@@ -136,20 +116,20 @@ func (s *Service) checkFunds(ctx context.Context, r txRepos, t domain.Transactio
 }
 
 // write persists the transaction, its entries, and the balance deltas.
-func (s *Service) write(ctx context.Context, r txRepos, t domain.Transaction) (*domain.Transaction, error) {
-	created, err := r.txns.Create(ctx, t)
+func (s *Service) write(ctx context.Context, r persistence.Stores, t domain.Transaction) (*domain.Transaction, error) {
+	created, err := r.Transactions.Create(ctx, t)
 	if err != nil {
 		return nil, err
 	}
 	for i := range t.Entries {
 		t.Entries[i].TransactionID = created.ID
 	}
-	created.Entries, err = r.entries.CreateMany(ctx, t.Entries)
+	created.Entries, err = r.Entries.CreateMany(ctx, t.Entries)
 	if err != nil {
 		return nil, err
 	}
 	for id, sums := range t.SumsByAccount() {
-		if err := r.balances.Apply(ctx, id, sums); err != nil {
+		if err := r.Balances.Apply(ctx, id, sums); err != nil {
 			return nil, err
 		}
 	}
@@ -172,17 +152,17 @@ func (s *Service) loadTransaction(ctx context.Context, txns *persistence.Transac
 	return t, nil
 }
 
-func (s *Service) releaseReservation(ctx context.Context, r txRepos, sums map[uuid.UUID]domain.AccountSums) error {
+func (s *Service) releaseReservation(ctx context.Context, r persistence.Stores, sums map[uuid.UUID]domain.AccountSums) error {
 	ids := make([]uuid.UUID, 0, len(sums))
 	for id := range sums {
 		ids = append(ids, id)
 	}
 	domain.SortIDs(ids)
-	if _, err := r.balances.LockAndGet(ctx, ids); err != nil {
+	if _, err := r.Balances.LockAndGet(ctx, ids); err != nil {
 		return err
 	}
 	for id, s := range sums {
-		if err := r.balances.ReleasePending(ctx, id, s); err != nil {
+		if err := r.Balances.ReleasePending(ctx, id, s); err != nil {
 			return err
 		}
 	}
@@ -190,15 +170,15 @@ func (s *Service) releaseReservation(ctx context.Context, r txRepos, sums map[uu
 }
 
 // lockPending loads a pending transaction with its row locked, plus entries.
-func (s *Service) lockPending(ctx context.Context, r txRepos, id uuid.UUID) (*domain.Transaction, error) {
-	h, err := r.txns.LockByID(ctx, id)
+func (s *Service) lockPending(ctx context.Context, r persistence.Stores, id uuid.UUID) (*domain.Transaction, error) {
+	h, err := r.Transactions.LockByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if h.Status != domain.TransactionStatusPending {
 		return nil, domain.ErrTransactionNotPending(h.ID, h.Status)
 	}
-	h.Entries, err = r.entries.ListByTransaction(ctx, h.ID)
+	h.Entries, err = r.Entries.ListByTransaction(ctx, h.ID)
 	if err != nil {
 		return nil, err
 	}
