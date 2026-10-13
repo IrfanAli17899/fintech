@@ -2,24 +2,18 @@
 
 One Go module, one Postgres, one schema per bounded-context module.
 Modules talk only through exported contract packages; implementation is
-hidden under `internal/` and enforced by the compiler.
+hidden under `internal/` and enforced by the compiler. The rules the compiler
+cannot see are enforced by `internal/archtest`.
 
 ## Status
 
-Target layout. Migration in progress:
+Architecture settled at v0.1.0. Everything below is true in the code.
 
-- done: schema per module, own migration tracking table, no cross-schema FKs,
-  rails depends on ledger contract only, ports/ split out of api/, layer
-  renames services → application, repositories → persistence,
-  handlers → transport/http (40e06ec); two-phase rail outcomes with
-  leases, backoff, Cancel and pending refunds (21a); refund children settle
-  in place, settlement label on summaries (21b); reconciliation report and
-  job (21c)
-- pending (commit 2): one file per operation, single Service, UnitOfWork
-- pending (commit 3 / story 20): codes/ split out, api.Ledger, api.LedgerAdmin,
-  adapter/, module.API()/Admin(), wallet module
-
-Anything listed as pending is not yet true in the code.
+- planned features: the wallet module (first consumer of `api.Ledger`)
+- known limits, deliberately out of scope for now: no authentication on any
+  endpoint; no metrics or tracing; rails are simulators; the outbox (see
+  Decisions) is not built, so a rail can hold an attempt the ledger never
+  committed, which reconciliation reports as `orphan_attempt`
 
 ## Layout
 
@@ -29,87 +23,123 @@ cmd/server/main.go               composition root: migrate, wire, routes, jobs, 
 internal/<module>/
   api/                           inbound contract: what the module offers; consumers import
   ports/                         outbound contracts: what the module needs; implementers import
-  codes/                         error code strings; leaf, zero deps
+  codes/                         error codes a caller can receive; leaf, zero deps
   migrations/  migrate.go        schema <module>.*, embedded, own tracking table
-  module.go                      New(deps) *Module; API(); Admin(); RegisterRoutes; Start/Stop; Seed
+  module.go                      New(deps) *Module; API(); RegisterRoutes; Start/Stop; Seed
   internal/
-    domain/                      entities, invariants, views, error constructors
-    application/                 use cases (one file per operation), background jobs
-                                 (settle, expire, reconcile), port/ (UnitOfWork only)
-    persistence/                 Postgres repos, concrete types
-    adapter/                     api.<Module> and api.<Module>Admin over application;
-                                 domain <-> api mapping
-    transport/http/              handlers + DTOs; depend on api only
+    domain/                      entities, invariants, derived views, error constructors
+    application/                 one Service; one file per use case, prefixed by what it
+                                 acts on (account_, transaction_, admin_), background
+                                 jobs in job_, shared helpers in shared_
+      port/                      UnitOfWork, the only abstracted dependency
+    persistence/                 Postgres repos (concrete), Stores, the Postgres UnitOfWork
+    adapter/                     api over application; the only domain <-> api mapping
+    transport/http/              handlers + JSON DTOs; depend on api only
 
-pkg/                             dependency-free infrastructure: database, errdefs, httpx, scheduler
+internal/archtest/               tests that enforce the dependency rules below
+pkg/                             infrastructure with no module knowledge: database, errdefs,
+                                 httpx, scheduler
 ```
+
+A module has only the contract packages it needs. Rails offers nothing
+inbound, so it has no `api/` or `codes/`; it implements the ledger's ports.
 
 ## Dependency rules
 
+Enforced by `internal/archtest` on every `make test`.
+
 ```
 application  → domain, application/port, persistence, <module>/ports, <module>/codes
-               (persistence here is the concrete repos; this is the deliberate
-               "repos are concrete" decision, not a leak. Only UnitOfWork is abstracted.)
+               (persistence is the concrete repos: the deliberate "repos are
+               concrete" decision, not a leak; use cases never see database/sql)
 persistence  → domain
+domain       → <module>/codes
 adapter      → application, api, domain           (only package that sees both sides)
-transport    → api                                (never application)
+transport    → api, codes                         (never application or domain)
 <module>/api → <module>/codes
-other module → <module>/api only (never Admin)
+codes, ports → nothing in the module
+other module → <module>/api only (never LedgerAdmin)
 implementer  → <module>/ports only
-main         → module roots only
+pkg          → nothing in internal/
+main         → module roots and pkg
 ```
 
-Nothing imports another module's internal/. No transaction crosses a module
-boundary; consistency across modules is idempotency keys + intent rows + reconciliation.
+Nothing imports another module's `internal/`. No transaction crosses a module
+boundary; consistency across modules is idempotency keys, outcome rows and
+reconciliation.
 
 ## Modules
 
 ```
 ledger   accounts, transactions, entries, balances, idempotency_keys; rails as an outbound port
-rails    attempts; implements ledger/ports.Rail (internal, rtp, card, swift);
+rails    attempts and outcomes; implements ledger/ports (internal, rtp, card, swift);
          acts as the ledger's outbox for rail outcomes
-wallet   operations; depends on ledger/api.Ledger only, never on rails.
+wallet   planned: operations; depends on ledger/api.Ledger only, never on rails.
          Picks a rail by name on the ledger call (topup, transfer, pay, refund)
 ```
 
 ## Contract surfaces
 
-- api.Ledger: what products call. Post, Reverse, Capture, Void, reads.
-- api.LedgerAdmin: rebuild/verify balances, reconciliation report. Wired
-  by main to transport only; no module receives it.
-- ports.Rail / ports.RailRegistry: what the ledger needs from rails,
-  including the ack that a rail outcome was applied (MarkApplied).
+- `api.Ledger`: what products call. Accounts, balance, history, Post, Reverse,
+  Capture, Void, GetTransaction. Other modules get it from `Module.API()`.
+- `api.LedgerAdmin`: rebuild and verify balances, reconciliation. The module
+  wires it to its own transport; `Module` has no accessor for it, so no other
+  module can receive it.
+- `codes`: every error code a caller can receive. Renaming one is a breaking change.
+- `ports.Rail` / `ports.RailRegistry`: what the ledger needs from rails. The
+  registry hands out due outcomes under a lease (`ClaimDue`), takes the
+  ledger's ack (`MarkApplied`) and failures (`RecordFailure`), and pages
+  attempts for reconciliation (`Attempts`).
 
 ## Background jobs
 
-Jobs are application use cases. module.go owns their scheduling via
-pkg/scheduler and starts/stops them; main only calls Start/Stop.
-Every job must be safe on N replicas: a lease or SKIP LOCKED held for the
-duration of the work, never just the select.
+Jobs are application use cases (`job_*.go`). `module.go` schedules them via
+`pkg/scheduler`; `main` only calls Start/Stop. Every job must be safe on N
+replicas: a lease or `SKIP LOCKED` held for the duration of the work, never
+just the select.
+
+- `outcomes`: two-phase rail outcomes (rail decides, ledger applies, ack)
+- `expire-holds`: one transaction per internal hold
+- `reconcile`: compares rails with the ledger every 15 minutes, logs findings
 
 ## Decisions
 
-- kind is product vocabulary (free text); lineage is ledger-owned (relation + parent_id);
-  every child carries a relation (CHECK, migration 013)
-- three lifecycle states: pending | posted | voided; everything else derived
+- kind is product vocabulary (free text); lineage is ledger-owned
+  (relation + parent_id); every child carries a relation (CHECK)
+- three lifecycle states: pending | posted | voided. A hold settled through
+  capture children ends voided; `domain.Summarize` labels it
+  `settled_via_children` or `partially_settled`
+- business rules live in Go, not SQL. SQL keeps integrity: append-only
+  triggers, and the live-balance query the cache is verified against
 - balances are a rebuildable cache, verified continuously
-- outbound ports are exported because Go's internal/ rule would otherwise block implementers
-- rail-backed holds are resolved by their rail only: never by the expirer, never by HTTP void/capture
-- rails.attempts records both the rail's decision and whether the ledger applied it
-  (applied_at). This is deliberate: rails is the outbox, the ledger acks through
-  ports. Never join ledger.* and rails.* in SQL.
-- repos are concrete (chosen): tests run against real Postgres, so repo
-  interfaces would have one implementation and no test boundary. The only
-  application port is UnitOfWork. Revisit if in-memory fakes are added.
-- api is designed as if remote: every mutating call takes a required idempotency
-  key, errors cross as codes only, DTOs are plain values (no pointers to internals,
-  no iterators, no driver types)
-- migrations are append-only (since story 15); fixes are new migrations
+- outbound ports are exported because Go's `internal/` rule would otherwise
+  block implementers
+- rail-backed holds are resolved by their rail only: never by the expirer,
+  never by an HTTP capture; an HTTP void asks the rail to cancel
+- `rails.outcomes` records both the rail's decision and whether the ledger
+  applied it (`applied_at`). Deliberate: rails is the outbox, the ledger acks
+  through ports. Never join `ledger.*` and `rails.*` in SQL
+- repos are concrete: tests run against real Postgres, so repo interfaces
+  would have one implementation and no test boundary. The only application
+  port is UnitOfWork, so use cases never see a database transaction
+- one `Service` struct: it is a dependency bag; what a caller may reach is
+  decided by the api interfaces, not by splitting the struct
+- api is designed as if remote: every mutating transaction call takes a
+  required idempotency key, errors cross as codes, DTOs are plain values.
+  `CreateAccount` is the exception: it is idempotent on its natural key
+  (owner, type, currency), and a repeat returns `ACCOUNT_EXISTS`
+- migrations are append-only from the v0.1.0 baseline. Before it they were
+  squashed into one `001_schema` per module; the history is in `docs/stories`
+- tests run against their own database (`fintech_test`, `make test-db`) and
+  packages run serially (`-p 1`) because they share it
 - connection pool: a rail-backed post holds two connections (ledger tx +
   rails tx) until the outbox lands, and every replica opens its own pool, so
   replicas × DB_MAX_OPEN < max_connections − headroom (migrations, psql, admin)
-- deployment shapes: in-process today; Build 4 adds cmd/ledger-svc and cmd/finance-svc
-  with gRPC adapters implementing the same api interfaces, plus an outbox
+- the outbox is the planned fix for initiating a rail inside the ledger's
+  transaction: commit pending first, then initiate. It removes the second
+  connection and the orphan window
+- deployment shapes: in-process today; later, `cmd/ledger-svc` with a gRPC
+  adapter implementing the same api interfaces
 
 ## Not this
 
@@ -117,5 +147,6 @@ duration of the work, never just the select.
 - no transactions passed across modules
 - no interfaces for structs with one implementation and no test boundary
 - no product nouns inside the ledger
+- no business rules in SQL
 - no cross-schema SQL joins or foreign keys
-- no Admin surface handed to another module
+- no admin surface handed to another module
