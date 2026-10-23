@@ -51,11 +51,12 @@ func (r reverseTransactionRequest) toCommand(originalID uuid.UUID) api.Reverse {
 
 type captureTransactionRequest struct {
 	Amount         int64  `json:"amount,omitempty"` // 0 or omitted = everything still held
+	Final          bool   `json:"final,omitempty"`  // release the rest and close the hold
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
 func (r captureTransactionRequest) toCommand(holdID uuid.UUID) api.Capture {
-	return api.Capture{IdempotencyKey: r.IdempotencyKey, HoldID: holdID, Amount: r.Amount}
+	return api.Capture{IdempotencyKey: r.IdempotencyKey, HoldID: holdID, Amount: r.Amount, Final: r.Final}
 }
 
 type voidTransactionRequest struct {

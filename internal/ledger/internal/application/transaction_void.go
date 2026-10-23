@@ -84,23 +84,11 @@ func (s *Service) voidLocked(ctx context.Context, r persistence.Stores, cmd Void
 		return h, false, r.Keys.SetResource(ctx, cmd.IdempotencyKey, h.ID)
 	}
 
-	capturedBy, err := r.Transactions.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
-	if err != nil {
-		return nil, false, err
-	}
-	captured := h.Consumed(capturedBy)
-	if remaining := h.Total() - captured; remaining > 0 {
-		rest := domain.Transaction{Entries: h.Scaled(remaining, capturedBy)}
-		if err := s.releaseReservation(ctx, r, pendingSums(rest)); err != nil {
-			return nil, false, err
-		}
-	}
-
 	var reason *string
 	if cmd.Reason != "" {
 		reason = &cmd.Reason
 	}
-	if err := r.Transactions.MarkVoided(ctx, h.ID, reason); err != nil {
+	if err := s.closeHold(ctx, r, h, reason); err != nil {
 		return nil, false, err
 	}
 	h.Status = domain.TransactionStatusVoided

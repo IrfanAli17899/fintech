@@ -1854,6 +1854,60 @@ func TestVoid_ReturnsTheSummaryAReadWouldShow(t *testing.T) {
 	}
 }
 
+func TestCapture_FinalReleasesTheRest(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString())) // authorize the estimate
+
+	key := uuid.NewString()
+	cmd := application.CaptureCommand{HoldID: h.ID, Amount: 300, Final: true, IdempotencyKey: key}
+	c, _, err := f.svc.Capture(f.ctx, cmd) // capture the actual fare
+	must(t, err)
+
+	if b := f.balance(t, ali); b.Posted != 700 || b.PendingOut != 0 || b.Available != 700 {
+		t.Fatalf("the 200 left must be released at once: %+v", b)
+	}
+	got, err := f.svc.GetTransaction(f.ctx, h.ID)
+	must(t, err)
+	if got.Status != domain.TransactionStatusVoided || got.Summary.Settlement != domain.SettlementPartiallySettled {
+		t.Fatalf("hold must be closed as partially settled: %s %s", got.Status, got.Summary.Settlement)
+	}
+	if _, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 100, IdempotencyKey: uuid.NewString()}); !errdefs.Is(err, domain.CodeTransactionNotPending) {
+		t.Fatalf("a closed hold cannot be captured again, got %v", err)
+	}
+
+	again, replayed, err := f.svc.Capture(f.ctx, cmd)
+	must(t, err)
+	if !replayed || again.ID != c.ID {
+		t.Fatalf("retry must replay the capture: replayed=%v", replayed)
+	}
+	cmd.Final = false
+	if _, _, err := f.svc.Capture(f.ctx, cmd); !errdefs.Is(err, domain.CodeIdempotencyKeyReused) {
+		t.Fatalf("same key, different Final: want IDEMPOTENCY_KEY_REUSED, got %v", err)
+	}
+	f.verifyClean(t)
+}
+
+func TestCapture_OverCaptureIsRejected(t *testing.T) {
+	f := setup(t)
+	cash := f.account(t, domain.AccountAsset)
+	ali := f.account(t, domain.AccountLiability)
+	shop := f.account(t, domain.AccountLiability)
+	f.post(t, transfer(cash, ali, 1000, uuid.NewString()))
+	h := f.post(t, hold(ali, shop, 500, uuid.NewString()))
+
+	_, _, err := f.svc.Capture(f.ctx, application.CaptureCommand{HoldID: h.ID, Amount: 600, Final: true, IdempotencyKey: uuid.NewString()})
+	if !errdefs.Is(err, domain.CodeCaptureExceedsHold) {
+		t.Fatalf("want CAPTURE_EXCEEDS_HOLD, got %v", err)
+	}
+	if b := f.balance(t, ali); b.PendingOut != 500 {
+		t.Fatalf("a rejected capture must leave the hold untouched: %+v", b)
+	}
+}
+
 // ---- story 11b: kind is product-owned ----
 
 func TestPost_KindIsProductOwned(t *testing.T) {

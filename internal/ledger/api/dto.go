@@ -74,6 +74,10 @@ type Capture struct {
 	IdempotencyKey string
 	HoldID         uuid.UUID
 	Amount         int64 // 0 = everything still held
+	// Final releases whatever is still held after this capture and closes the
+	// hold. Without it the rest stays reserved for later captures, a Void, or
+	// expiry.
+	Final bool
 }
 
 type Void struct {

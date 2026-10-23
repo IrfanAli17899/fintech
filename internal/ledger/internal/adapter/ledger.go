@@ -95,7 +95,7 @@ func (l *Ledger) Reverse(ctx context.Context, cmd api.Reverse) (api.Result, erro
 
 func (l *Ledger) Capture(ctx context.Context, cmd api.Capture) (api.Result, error) {
 	return result(l.svc.Capture(ctx, application.CaptureCommand{
-		HoldID: cmd.HoldID, Amount: cmd.Amount, IdempotencyKey: cmd.IdempotencyKey,
+		HoldID: cmd.HoldID, Amount: cmd.Amount, Final: cmd.Final, IdempotencyKey: cmd.IdempotencyKey,
 	}))
 }
 

@@ -28,8 +28,10 @@ type Ledger interface {
 	// Reverse refunds all or part of a posted transaction. On a rail-backed
 	// transaction the refund comes back pending until the rail confirms it.
 	Reverse(ctx context.Context, cmd Reverse) (Result, error)
-	// Capture posts all or part of an internal hold. A hold a rail owns
-	// returns codes.RailManagedHold: the rail settles it.
+	// Capture posts all or part of an internal hold; with Final it also
+	// releases the rest. Capturing more than is held returns
+	// codes.CaptureExceedsHold: charge the difference as a new Post. A hold a
+	// rail owns returns codes.RailManagedHold: the rail settles it.
 	Capture(ctx context.Context, cmd Capture) (Result, error)
 	// Void releases a hold. On a rail-backed hold it asks the rail to cancel
 	// and the hold comes back still pending until the rail confirms; a rail

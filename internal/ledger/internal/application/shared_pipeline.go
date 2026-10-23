@@ -171,6 +171,23 @@ func (s *Service) releaseReservation(ctx context.Context, r persistence.Stores, 
 	return nil
 }
 
+// closeHold releases whatever h still reserves after its posted captures and
+// marks it voided. Void, a Final capture and a capture that consumes the
+// whole hold all end a hold this way.
+func (s *Service) closeHold(ctx context.Context, r persistence.Stores, h *domain.Transaction, reason *string) error {
+	capturedBy, err := r.Transactions.ChildAmountsByAccount(ctx, h.ID, domain.RelationCaptures)
+	if err != nil {
+		return err
+	}
+	if remaining := h.Total() - h.Consumed(capturedBy); remaining > 0 {
+		rest := domain.Transaction{Entries: h.Scaled(remaining, capturedBy)}
+		if err := s.releaseReservation(ctx, r, pendingSums(rest)); err != nil {
+			return err
+		}
+	}
+	return r.Transactions.MarkVoided(ctx, h.ID, reason)
+}
+
 // lockPending loads a pending transaction with its row locked, plus entries.
 func (s *Service) lockPending(ctx context.Context, r persistence.Stores, id uuid.UUID) (*domain.Transaction, error) {
 	h, err := r.Transactions.LockByID(ctx, id)

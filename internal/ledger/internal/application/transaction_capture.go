@@ -14,6 +14,7 @@ import (
 type CaptureCommand struct {
 	HoldID         uuid.UUID
 	Amount         int64 // 0 = full
+	Final          bool  // release whatever is left after this capture and close the hold
 	IdempotencyKey string
 	System         bool
 }
@@ -25,7 +26,7 @@ func (s *Service) Capture(ctx context.Context, cmd CaptureCommand) (*domain.Tran
 	)
 	err := s.uow.Do(ctx, func(r persistence.Stores) error {
 
-		hash := domain.HashOf("capture", cmd.HoldID.String(), strconv.FormatInt(cmd.Amount, 10))
+		hash := domain.HashOf("capture", cmd.HoldID.String(), strconv.FormatInt(cmd.Amount, 10), strconv.FormatBool(cmd.Final))
 		rp, err := claimKey(ctx, r.Keys, cmd.IdempotencyKey, hash, domain.ResourceTransaction)
 		if err != nil {
 			return err
@@ -83,8 +84,8 @@ func (s *Service) Capture(ctx context.Context, cmd CaptureCommand) (*domain.Tran
 		if err != nil {
 			return err
 		}
-		if captured+amount == held {
-			if err := r.Transactions.MarkVoided(ctx, h.ID, nil); err != nil {
+		if cmd.Final || captured+amount == held {
+			if err := s.closeHold(ctx, r, h, nil); err != nil {
 				return err
 			}
 		}
