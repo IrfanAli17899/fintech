@@ -19,10 +19,14 @@ Architecture settled at v0.1.0. Everything below is true in the code.
 
 ## Layout
 
+Business modules sit at the root, one folder each; `cmd/` holds binaries,
+`platform/` shared infrastructure, and the root `internal/` what is private to
+this repo.
+
 ```
 cmd/server/main.go               composition root: migrate, wire, routes, jobs, shutdown
 
-internal/<module>/
+<module>/                        ledger/, rails/; later wallet/, identity/ ...
   api/                           inbound contract: what the module offers; consumers import
   ports/                         outbound contracts: what the module needs; implementers import
   codes/                         error codes a caller can receive; leaf, zero deps
@@ -39,9 +43,13 @@ internal/<module>/
     transport/http/              handlers + JSON DTOs; depend on api only
 
 internal/archtest/               tests that enforce the dependency rules below
-pkg/                             infrastructure with no module knowledge: database, errdefs,
+platform/                        infrastructure with no module knowledge: database, errdefs,
                                  httpx, scheduler
 ```
+
+A module's `api/`, `codes/`, `ports/` and root package are importable by
+other modules and by other repositories; its `internal/` is not, and the
+compiler enforces that.
 
 A module has only the contract packages it needs. Rails offers nothing
 inbound, so it has no `api/` or `codes/`; it implements the ledger's ports.
@@ -62,8 +70,8 @@ transport    → api, codes                         (never application or domain
 codes, ports → nothing in the module
 other module → <module>/api only (never LedgerAdmin)
 implementer  → <module>/ports only
-pkg          → nothing in internal/
-main         → module roots and pkg
+platform     → nothing outside platform
+main         → module roots and platform
 ```
 
 Nothing imports another module's `internal/`. No transaction crosses a module
@@ -79,6 +87,10 @@ rails    attempts and outcomes; implements ledger/ports (internal, rtp, card, sw
 wallet   planned: operations; depends on ledger/api.Ledger only, never on rails.
          Picks a rail by name on the ledger call (topup, transfer, pay, refund)
 ```
+
+Planned modules (README roadmap): identity, limits, wallet, risk, disputes
+(Build 2); settlement, lending, promotions (Build 3). Each gets the same shape
+and depends on others only through their `api/`; nothing depends on a vertical.
 
 ## Contract surfaces
 
@@ -96,7 +108,7 @@ wallet   planned: operations; depends on ledger/api.Ledger only, never on rails.
 ## Background jobs
 
 Jobs are application use cases (`job_*.go`). `module.go` schedules them via
-`pkg/scheduler`; `main` only calls Start/Stop. Every job must be safe on N
+`platform/scheduler`; `main` only calls Start/Stop. Every job must be safe on N
 replicas: a lease or `SKIP LOCKED` held for the duration of the work, never
 just the select.
 
@@ -105,6 +117,11 @@ just the select.
 - `reconcile`: compares rails with the ledger every 15 minutes, logs findings
 
 ## Decisions
+
+- one repository, modular monolith. Module contracts are importable, so other
+  products can use the ledger as a library without a split. A module gets its
+  own `go.mod` or repository when a second consumer needs a different release
+  cadence, not before; the enforced boundaries make that step mechanical
 
 - kind is product vocabulary (free text); lineage is ledger-owned
   (relation + parent_id); every child carries a relation (CHECK)

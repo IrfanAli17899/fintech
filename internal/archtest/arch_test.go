@@ -73,42 +73,42 @@ func TestDependencyRules(t *testing.T) {
 	}
 	rules := []rule{
 		{"transport depends on the api, never on the application or domain",
-			func(d string) bool { return under(d, "internal/ledger/internal/transport") },
-			onlyLocal("internal/ledger/api", "internal/ledger/codes", "pkg")},
+			func(d string) bool { return under(d, "ledger/internal/transport") },
+			onlyLocal("ledger/api", "ledger/codes", "platform")},
 		{"use cases never see SQL",
-			func(d string) bool { return d == "internal/ledger/internal/application" },
+			func(d string) bool { return d == "ledger/internal/application" },
 			func(imp string) bool {
 				l, _ := local(imp)
-				return imp != "database/sql" && l != "pkg/database" &&
-					!under(l, "internal/ledger/internal/transport") && !under(l, "internal/ledger/internal/adapter")
+				return imp != "database/sql" && l != "platform/database" &&
+					!under(l, "ledger/internal/transport") && !under(l, "ledger/internal/adapter")
 			}},
 		{"persistence knows nothing above it",
-			func(d string) bool { return d == "internal/ledger/internal/persistence" },
-			onlyLocal("internal/ledger/internal/domain", "pkg")},
+			func(d string) bool { return d == "ledger/internal/persistence" },
+			onlyLocal("ledger/internal/domain", "platform")},
 		{"domain depends only on codes and errdefs",
-			func(d string) bool { return d == "internal/ledger/internal/domain" },
-			onlyLocal("internal/ledger/codes", "pkg/errdefs")},
+			func(d string) bool { return d == "ledger/internal/domain" },
+			onlyLocal("ledger/codes", "platform/errdefs")},
 		{"api depends only on codes",
-			func(d string) bool { return d == "internal/ledger/api" },
-			onlyLocal("internal/ledger/codes")},
+			func(d string) bool { return d == "ledger/api" },
+			onlyLocal("ledger/codes")},
 		{"codes is a leaf",
-			func(d string) bool { return d == "internal/ledger/codes" },
+			func(d string) bool { return d == "ledger/codes" },
 			func(string) bool { return false }},
 		{"ports depend on nothing in the module",
-			func(d string) bool { return d == "internal/ledger/ports" },
+			func(d string) bool { return d == "ledger/ports" },
 			onlyLocal()},
 		{"rails sees the ledger only through its ports",
-			func(d string) bool { return under(d, "internal/rails") },
+			func(d string) bool { return under(d, "rails") },
 			func(imp string) bool {
 				l, ok := local(imp)
-				return !ok || !under(l, "internal/ledger") || l == "internal/ledger/ports"
+				return !ok || !under(l, "ledger") || l == "ledger/ports"
 			}},
 		{"the ledger never depends on rails",
-			func(d string) bool { return under(d, "internal/ledger") },
-			func(imp string) bool { l, _ := local(imp); return !under(l, "internal/rails") }},
-		{"pkg is infrastructure with no module knowledge",
-			func(d string) bool { return under(d, "pkg") },
-			func(imp string) bool { l, ok := local(imp); return !ok || under(l, "pkg") }},
+			func(d string) bool { return under(d, "ledger") },
+			func(imp string) bool { l, _ := local(imp); return !under(l, "rails") }},
+		{"platform is infrastructure with no module knowledge",
+			func(d string) bool { return under(d, "platform") },
+			func(imp string) bool { l, ok := local(imp); return !ok || under(l, "platform") }},
 	}
 
 	all := imports(t)

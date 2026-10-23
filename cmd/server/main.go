@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/irfanali17899/fintech/internal/ledger"
-	"github.com/irfanali17899/fintech/internal/rails"
-	"github.com/irfanali17899/fintech/pkg/database"
-	"github.com/irfanali17899/fintech/pkg/httpx"
+	"github.com/irfanali17899/fintech/ledger"
+	"github.com/irfanali17899/fintech/platform/database"
+	"github.com/irfanali17899/fintech/platform/httpx"
+	"github.com/irfanali17899/fintech/rails"
 )
 
 func main() {

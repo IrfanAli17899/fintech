@@ -1,0 +1,138 @@
+package adapters
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	"github.com/irfanali17899/fintech/ledger/ports"
+	"github.com/irfanali17899/fintech/platform/database"
+	"github.com/irfanali17899/fintech/rails/internal/domain"
+	"github.com/irfanali17899/fintech/rails/internal/persistence"
+)
+
+type Registry struct {
+	rails    map[string]ports.Rail
+	attempts *persistence.AttemptRepo
+	outcomes *persistence.OutcomeRepo
+	tx       database.TxRunner
+}
+
+func NewRegistry(tx database.TxRunner, attempts *persistence.AttemptRepo, outcomes *persistence.OutcomeRepo, rails ...ports.Rail) *Registry {
+	r := &Registry{tx: tx, attempts: attempts, outcomes: outcomes, rails: make(map[string]ports.Rail, len(rails))}
+	for _, x := range rails {
+		r.rails[x.Name()] = x
+	}
+	return r
+}
+
+func (r *Registry) Get(name string) (ports.Rail, bool) {
+	x, ok := r.rails[name]
+	return x, ok
+}
+
+func (r *Registry) ClaimDue(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]ports.Outcome, error) {
+	var claimed []domain.Outcome
+	err := r.tx.InTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		claimed, err = r.outcomes.WithTx(tx).ClaimDue(ctx, now, lease, limit)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	refs := make([]string, len(claimed))
+	for i, o := range claimed {
+		refs[i] = o.Ref
+	}
+	attempts, err := r.attempts.ByRefs(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]ports.Outcome, 0, len(claimed))
+	for _, o := range claimed {
+		a := attempts[o.Ref] // outcomes.ref is a foreign key, so it is present
+		d, ok := decisions[o.State]
+		if !ok {
+			return nil, fmt.Errorf("outcome %s/%s in unexpected state %s", o.Ref, o.Kind, o.State)
+		}
+		out = append(out, ports.Outcome{
+			Rail:          a.Rail,
+			Ref:           o.Ref,
+			Kind:          ports.OutcomeKind(o.Kind),
+			Key:           o.Key,
+			TransactionID: a.TransactionID,
+			Amount:        o.Amount,
+			Decision:      d,
+			Reason:        deref(o.Reason),
+		})
+	}
+	return out, nil
+}
+
+var decisions = map[domain.AttemptState]ports.Decision{
+	domain.AttemptInitiated: ports.DecisionUndecided,
+	domain.AttemptSettled:   ports.DecisionSettled,
+	domain.AttemptBounced:   ports.DecisionBounced,
+	domain.AttemptCancelled: ports.DecisionCancelled,
+}
+
+func (r *Registry) MarkApplied(ctx context.Context, o ports.Outcome) error {
+	_, err := r.outcomes.MarkApplied(ctx, o.Ref, domain.OutcomeKind(o.Kind), o.Key)
+	return err
+}
+
+func (r *Registry) Attempts(ctx context.Context, afterRef string, limit int) ([]ports.AttemptRecord, error) {
+	page, err := r.attempts.Page(ctx, afterRef, limit)
+	if err != nil || len(page) == 0 {
+		return nil, err
+	}
+	refs := make([]string, len(page))
+	for i, a := range page {
+		refs[i] = a.Ref
+	}
+	outcomes, err := r.outcomes.ByAttempts(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	byRef := make(map[string][]ports.OutcomeRecord, len(page))
+	for _, o := range outcomes {
+		d, ok := decisions[o.State]
+		if !ok {
+			return nil, fmt.Errorf("outcome %s/%s in unexpected state %s", o.Ref, o.Kind, o.State)
+		}
+		byRef[o.Ref] = append(byRef[o.Ref], ports.OutcomeRecord{
+			Kind:         ports.OutcomeKind(o.Kind),
+			Key:          o.Key,
+			Amount:       o.Amount,
+			Decision:     d,
+			Applied:      o.AppliedAt != nil,
+			AttemptCount: o.AttemptCount,
+			LastError:    deref(o.LastError),
+			UpdatedAt:    o.UpdatedAt,
+		})
+	}
+
+	out := make([]ports.AttemptRecord, len(page))
+	for i, a := range page {
+		out[i] = ports.AttemptRecord{
+			Rail: a.Rail, Ref: a.Ref, TransactionID: a.TransactionID,
+			Amount: a.Amount, CreatedAt: a.CreatedAt, Outcomes: byRef[a.Ref],
+		}
+	}
+	return out, nil
+}
+
+func (r *Registry) RecordFailure(ctx context.Context, o ports.Outcome, cause error) error {
+	return r.outcomes.RecordFailure(ctx, o.Ref, domain.OutcomeKind(o.Kind), o.Key, cause.Error())
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}

@@ -32,7 +32,7 @@ flowchart LR
   main["cmd/server"] --> ledger
   main --> rails
 
-  subgraph ledger["internal/ledger"]
+  subgraph ledger["ledger"]
     direction TB
     transport["transport/http"] --> api["api + codes"]
     adapter --> api
@@ -42,7 +42,7 @@ flowchart LR
     application --> ports
   end
 
-  subgraph rails["internal/rails"]
+  subgraph rails["rails"]
     railimpl["card · swift · rtp · internal"]
   end
 
@@ -52,8 +52,11 @@ flowchart LR
 ```
 
 - Each module owns a Postgres schema; no SQL ever joins across them.
-- Other modules use the ledger only through `api` (`Module.API()`); rails
-  implement the ledger's `ports`. Everything else is under `internal/`.
+- One repository, modular monolith. Other modules, and other repositories,
+  use the ledger only through `ledger/api`; rails implement `ledger/ports`.
+  Everything else is under each module's `internal/`, which the compiler
+  keeps private. A module moves to its own repository when a second consumer
+  needs a different release cadence, not before.
 - The dependency rules are tested: `internal/archtest` fails the build when a
   layer reaches somewhere it should not.
 
@@ -113,10 +116,30 @@ created on first run), with the race detector on.
 ## Layout
 
 ```
-cmd/server/            composition root
-internal/ledger/       the ledger module: api, codes, ports, migrations, internal/
-internal/rails/        rail simulators implementing the ledger's ports
-internal/archtest/     dependency-rule tests
-pkg/                   database, errors, http helpers, scheduler
-docs/                  architecture and story-by-story decisions
+cmd/server/            binaries: the composition root
+ledger/                the ledger module: api, codes, ports, migrations, internal/
+rails/                 rail simulators implementing the ledger's ports
+platform/              shared infrastructure: database, errors, http helpers, scheduler
+internal/archtest/     dependency-rule tests, private to this repository
+docs/                  architecture and the build journal
 ```
+
+Every other top-level folder is a business module with the same shape.
+
+## Roadmap
+
+v0.1.0 is the ledger and its rails. The verticals arrive as modules in this
+repository, each depending on the others only through their `api/`:
+
+- **Build 2, wallet and compliance:** `identity` (users, KYC states, tiers),
+  `limits` (per-tier caps checked before posting), `wallet` (top-up, P2P by
+  phone, pay merchant), `risk` (rule engine: allow, review, block),
+  `disputes` (chargebacks as rail-initiated reversals), authentication
+- **Build 3, marketplace and lending:** `settlement` (multi-leg orders,
+  merchant payouts, clawback after chargebacks), `lending` (BNPL: credit
+  lines, installment schedules, collection), `promotions` (vouchers, cashback)
+- **Capstone:** an outbox so rails are called after the ledger commits,
+  domain events, reconciliation against provider settlement files,
+  reporting, observability, load numbers
+- **Build 4, distributed:** the same `api` interfaces served over gRPC from
+  separate binaries, events through Kafka, sagas with reversal as compensation
