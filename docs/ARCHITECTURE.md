@@ -56,7 +56,12 @@ inbound, so it has no `api/` or `codes/`; it implements the ledger's ports.
 
 ## Dependency rules
 
-Enforced by `internal/archtest` on every `make test`.
+Enforced by `internal/archtest` on every `make test`. The checker finds
+every module (a top-level folder with a `module.go`) and applies the same
+rules to each, including that SQL and migrations name only the module's own
+schema; it is itself tested against a good and a bad fixture repository.
+Module dependencies are declared in its test (today only rails → ledger), so
+a new edge is a visible decision.
 
 ```
 application  → domain, application/port, persistence, <module>/ports, <module>/codes
@@ -162,6 +167,26 @@ just the select.
   is never rewritten to match later code
 - deployment shapes: in-process today; later, `cmd/ledger-svc` with a gRPC
   adapter implementing the same api interfaces
+
+## Parked
+
+Deliberately not done yet. Each line: what, why it waits, where it lands.
+
+- authentication (API keys for products, JWT for users): nothing is exposed yet; Build 2
+- idempotency keys scoped per caller: needs authentication first; Build 2
+- chargebacks (rail-initiated reversals): need the disputes lifecycle; Build 2
+- incremental authorization (raise a hold before capture): additive, no consumer yet; Build 3
+- merchant-chosen capture amount on card holds: card settles the full authorization today; Build 3
+- outbox (call rails after the ledger commits): bigger change, reconciliation covers the gap; capstone, reusing dukan's `pkg/outbox`
+- structured logging (`slog`), request ids, metrics, traces: the outcome worker is the showcase; capstone
+- composition root as an `app` package (module interface, `/healthz`, `/readyz`, panic-recovery middleware): worth it when a second module serves HTTP; with the wallet
+- a fresh schema per test (dukan's `testdb.Fresh`) or testcontainers: would remove `drain()` and `-p 1`; capstone
+- reconciliation watermark (only attempts changed since the last clean run): a full scan is fine at this size; capstone
+- statements as an async read model (CQRS): only if read load demands it; capstone
+- a real status for holds settled through captures: the settlement label covers it; capstone
+- `platform/` as its own repository: dukan depends on it too; when a third consumer appears
+- `internal/archtest` as its own library: dukan carries a drifted copy; extract once both repos share one module layout, after evaluating `go-arch-lint` and `arch-go` (neither checks SQL schema ownership, which this one does)
+- a clearer error than `INVALID_JSON` for a fractional amount: cosmetic
 
 ## Not this
 
