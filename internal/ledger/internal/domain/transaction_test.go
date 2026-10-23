@@ -211,3 +211,43 @@ func TestSummarize(t *testing.T) {
 		})
 	}
 }
+
+func TestUnbalancedCurrencies(t *testing.T) {
+	line := func(cur string, typ AccountType, d, c, pd, pc int64) TrialBalanceLine {
+		return TrialBalanceLine{Currency: cur, Type: typ, Sums: AccountSums{Debits: d, Credits: c, PendingDebits: pd, PendingCredits: pc}}
+	}
+	cases := []struct {
+		name  string
+		lines []TrialBalanceLine
+		want  []string
+	}{
+		{"balanced across types", []TrialBalanceLine{
+			line("PKR", AccountAsset, 1000, 0, 0, 0), line("PKR", AccountLiability, 0, 1000, 0, 0),
+		}, nil},
+		{"balanced in two currencies", []TrialBalanceLine{
+			line("PKR", AccountAsset, 1000, 0, 0, 0), line("PKR", AccountLiability, 0, 1000, 0, 0),
+			line("SAR", AccountAsset, 50, 0, 0, 0), line("SAR", AccountLiability, 0, 50, 0, 0),
+		}, nil},
+		// summed globally these cancel: debits 1100 = credits 1100
+		{"opposite imbalances in two currencies", []TrialBalanceLine{
+			line("PKR", AccountAsset, 1000, 0, 0, 0), line("PKR", AccountLiability, 0, 900, 0, 0),
+			line("SAR", AccountAsset, 100, 0, 0, 0), line("SAR", AccountLiability, 0, 200, 0, 0),
+		}, []string{"PKR", "SAR"}},
+		{"pending imbalance only", []TrialBalanceLine{
+			line("PKR", AccountAsset, 1000, 0, 0, 0), line("PKR", AccountLiability, 0, 1000, 300, 0),
+		}, []string{"PKR"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := UnbalancedCurrencies(c.lines)
+			if len(got) != len(c.want) {
+				t.Fatalf("unbalanced = %v, want %v", got, c.want)
+			}
+			for _, cur := range c.want {
+				if _, ok := got[cur]; !ok {
+					t.Fatalf("%s not reported: %v", cur, got)
+				}
+			}
+		})
+	}
+}

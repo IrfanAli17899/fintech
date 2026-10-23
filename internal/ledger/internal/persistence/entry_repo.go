@@ -89,23 +89,37 @@ func (r *EntryRepo) ListByTransaction(ctx context.Context, txID uuid.UUID) ([]do
 
 // ListByAccount returns an account's entries newest first, each with its
 // transaction's header. beforeSeq == 0 means start from the newest.
-// TrialBalance sums every entry by direction and status. Debits must equal
-// credits, separately for posted and for pending money.
-func (r *EntryRepo) TrialBalance(ctx context.Context) (domain.AccountSums, error) {
-	var s domain.AccountSums
-	err := r.db.QueryRowContext(ctx, `
-		SELECT
+// TrialBalance sums every entry by currency and account type, split into
+// posted and pending money. Within a currency, debits must equal credits.
+func (r *EntryRepo) TrialBalance(ctx context.Context) ([]domain.TrialBalanceLine, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT a.currency, a.type,
 			COALESCE(SUM(e.amount) FILTER (WHERE t.status = 'posted'  AND e.direction = 'debit'), 0),
 			COALESCE(SUM(e.amount) FILTER (WHERE t.status = 'posted'  AND e.direction = 'credit'), 0),
 			COALESCE(SUM(e.amount) FILTER (WHERE t.status = 'pending' AND e.direction = 'debit'), 0),
 			COALESCE(SUM(e.amount) FILTER (WHERE t.status = 'pending' AND e.direction = 'credit'), 0)
 		FROM ledger.entries e
-		JOIN ledger.transactions t ON t.id = e.transaction_id`,
-	).Scan(&s.Debits, &s.Credits, &s.PendingDebits, &s.PendingCredits)
+		JOIN ledger.transactions t ON t.id = e.transaction_id
+		JOIN ledger.accounts a ON a.id = e.account_id
+		GROUP BY a.currency, a.type
+		ORDER BY a.currency, a.type`)
 	if err != nil {
-		return s, errdefs.Internalf(err, "trial balance")
+		return nil, errdefs.Internalf(err, "trial balance")
 	}
-	return s, nil
+	defer rows.Close()
+
+	var out []domain.TrialBalanceLine
+	for rows.Next() {
+		var l domain.TrialBalanceLine
+		if err := rows.Scan(&l.Currency, &l.Type, &l.Sums.Debits, &l.Sums.Credits, &l.Sums.PendingDebits, &l.Sums.PendingCredits); err != nil {
+			return nil, errdefs.Internalf(err, "scan trial balance")
+		}
+		out = append(out, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errdefs.Internalf(err, "trial balance rows")
+	}
+	return out, nil
 }
 
 func (r *EntryRepo) ListByAccount(ctx context.Context, accountID uuid.UUID, beforeSeq int64, limit int) ([]domain.AccountEntry, error) {

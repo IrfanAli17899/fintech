@@ -34,7 +34,14 @@ func (a *Admin) Reconcile(ctx context.Context) (api.ReconciliationReport, error)
 	if err != nil || rep == nil {
 		return api.ReconciliationReport{}, err
 	}
-	out := api.ReconciliationReport{At: rep.At, AttemptsChecked: rep.AttemptsChecked, Findings: make([]api.Finding, len(rep.Findings))}
+	out := api.ReconciliationReport{
+		At: rep.At, AttemptsChecked: rep.AttemptsChecked,
+		Findings:     make([]api.Finding, len(rep.Findings)),
+		TrialBalance: make([]api.TrialBalanceLine, len(rep.TrialBalance)),
+	}
+	for i, l := range rep.TrialBalance {
+		out.TrialBalance[i] = api.TrialBalanceLine{Currency: l.Currency, AccountType: string(l.Type), Sums: sums(l.Sums)}
+	}
 	for i, f := range rep.Findings {
 		out.Findings[i] = api.Finding{
 			Kind: string(f.Kind), Reason: f.Reason, Rail: f.Rail, Ref: f.Ref,

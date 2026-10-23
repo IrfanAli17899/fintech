@@ -65,14 +65,14 @@ func (s *Service) Reconcile(ctx context.Context, at time.Time) (*domain.Reconcil
 		}
 	}
 
-	tb, err := s.stores.Entries.TrialBalance(ctx)
+	rep.TrialBalance, err = s.stores.Entries.TrialBalance(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if tb.Debits != tb.Credits || tb.PendingDebits != tb.PendingCredits {
+	for currency, t := range domain.UnbalancedCurrencies(rep.TrialBalance) {
 		rep.Add(domain.Finding{Kind: domain.FindingTrialBalance, Detail: fmt.Sprintf(
-			"posted debits %d credits %d; pending debits %d credits %d",
-			tb.Debits, tb.Credits, tb.PendingDebits, tb.PendingCredits)})
+			"%s: posted debits %d credits %d; pending debits %d credits %d",
+			currency, t.Debits, t.Credits, t.PendingDebits, t.PendingCredits)})
 	}
 
 	drift, err := s.stores.Balances.Verify(ctx)

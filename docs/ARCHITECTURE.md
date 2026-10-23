@@ -13,7 +13,9 @@ Architecture settled at v0.1.0. Everything below is true in the code.
 - known limits, deliberately out of scope for now: no authentication on any
   endpoint; no metrics or tracing; rails are simulators; the outbox (see
   Decisions) is not built, so a rail can hold an attempt the ledger never
-  committed, which reconciliation reports as `orphan_attempt`
+  committed, which reconciliation reports as `orphan_attempt`; no
+  chargebacks yet: the card rail supports merchant refunds, and
+  rail-initiated reversals arrive with disputes in Build 2
 
 ## Layout
 

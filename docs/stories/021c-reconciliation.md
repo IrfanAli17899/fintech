@@ -16,7 +16,11 @@ without either side changing the other.
     refund_not_voided, refund_orphan, refund_never_sent
   - unapplied: decided, never applied, older than the grace window
   - stuck: attempt_count ≥ 10 (still retried), with last_error
-  - trial_balance: posted or pending debits ≠ credits across the ledger
+  - trial_balance: within a currency, posted or pending debits ≠ credits.
+    Checked per currency because summed across currencies a PKR imbalance
+    and an opposite SAR imbalance cancel out; the report also carries the
+    sums by currency and account type (added at the v0.1.0 audit; the first
+    version summed everything together)
   - balance_drift: the cache differs from entries (same check as verify)
 - anything younger than 10 minutes is skipped: a post whose rails tx has
   committed but whose ledger tx has not, or an outcome inside its lease

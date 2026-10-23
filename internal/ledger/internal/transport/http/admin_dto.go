@@ -46,18 +46,29 @@ type findingResponse struct {
 	Detail        string    `json:"detail"`
 }
 
+type trialBalanceLineResponse struct {
+	Currency    string `json:"currency"`
+	AccountType string `json:"account_type"`
+	sumsResponse
+}
+
 type reconciliationResponse struct {
-	At              time.Time         `json:"at"`
-	Clean           bool              `json:"clean"`
-	AttemptsChecked int               `json:"attempts_checked"`
-	Counts          map[string]int    `json:"counts"`
-	Findings        []findingResponse `json:"findings"`
+	At              time.Time                  `json:"at"`
+	Clean           bool                       `json:"clean"`
+	AttemptsChecked int                        `json:"attempts_checked"`
+	Counts          map[string]int             `json:"counts"`
+	Findings        []findingResponse          `json:"findings"`
+	TrialBalance    []trialBalanceLineResponse `json:"trial_balance"`
 }
 
 func toReconciliationResponse(r api.ReconciliationReport) reconciliationResponse {
 	out := reconciliationResponse{
 		At: r.At, Clean: len(r.Findings) == 0, AttemptsChecked: r.AttemptsChecked,
 		Counts: map[string]int{}, Findings: make([]findingResponse, len(r.Findings)),
+		TrialBalance: make([]trialBalanceLineResponse, len(r.TrialBalance)),
+	}
+	for i, l := range r.TrialBalance {
+		out.TrialBalance[i] = trialBalanceLineResponse{Currency: l.Currency, AccountType: l.AccountType, sumsResponse: toSumsResponse(l.Sums)}
 	}
 	for i, f := range r.Findings {
 		key := f.Kind

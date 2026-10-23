@@ -168,6 +168,15 @@ type ReconciliationReport struct {
 	At              time.Time
 	AttemptsChecked int
 	Findings        []Finding
+	TrialBalance    []TrialBalanceLine
+}
+
+// TrialBalanceLine sums every entry for one currency and account type. Within
+// a currency, debits equal credits; a currency that does not is a finding.
+type TrialBalanceLine struct {
+	Currency    string
+	AccountType string
+	Sums        Sums
 }
 
 type Finding struct {

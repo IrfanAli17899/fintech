@@ -54,6 +54,7 @@ type ReconciliationReport struct {
 	At              time.Time
 	AttemptsChecked int
 	Findings        []Finding
+	TrialBalance    []TrialBalanceLine // per currency and account type
 }
 
 func (r *ReconciliationReport) Add(f Finding) { r.Findings = append(r.Findings, f) }
@@ -65,4 +66,34 @@ type TransactionState struct {
 	ID       uuid.UUID
 	Status   TransactionStatus
 	Captured int64 // posted by capture children
+}
+
+// TrialBalanceLine is every entry's sum for one currency and account type.
+type TrialBalanceLine struct {
+	Currency string
+	Type     AccountType
+	Sums     AccountSums
+}
+
+// UnbalancedCurrencies returns each currency whose debits and credits differ,
+// for posted or for pending money, with its totals. The check is per currency:
+// summed across currencies, a PKR imbalance and an opposite SAR imbalance
+// would cancel out and hide both.
+func UnbalancedCurrencies(lines []TrialBalanceLine) map[string]AccountSums {
+	totals := map[string]AccountSums{}
+	for _, l := range lines {
+		t := totals[l.Currency]
+		t.Debits += l.Sums.Debits
+		t.Credits += l.Sums.Credits
+		t.PendingDebits += l.Sums.PendingDebits
+		t.PendingCredits += l.Sums.PendingCredits
+		totals[l.Currency] = t
+	}
+	out := map[string]AccountSums{}
+	for c, t := range totals {
+		if t.Debits != t.Credits || t.PendingDebits != t.PendingCredits {
+			out[c] = t
+		}
+	}
+	return out
 }
